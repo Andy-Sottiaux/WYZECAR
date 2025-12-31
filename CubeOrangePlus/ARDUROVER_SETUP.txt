@@ -1,0 +1,128 @@
+================================================================================
+                   ARDUROVER CONFIGURATION FOR WYZECAR
+================================================================================
+
+Output Assignment:
+  MAIN OUT 1: Steering servo
+  MAIN OUT 2: Throttle PWM to ESP32
+
+================================================================================
+                          QUICK START
+================================================================================
+
+1. Connect Cube via USB, open Mission Planner, connect at 115200 baud
+2. Install ArduRover: Setup > Install Firmware > Rover
+3. Load parameters below via Config > Full Parameter List
+4. Calibrate compass: Setup > Mandatory Hardware > Compass
+5. Arm and test
+
+================================================================================
+                     REQUIRED PARAMETERS
+================================================================================
+
+# Servo Outputs
+SERVO1_FUNCTION,26          # GroundSteering
+SERVO1_MIN,1000
+SERVO1_MAX,2000
+SERVO1_TRIM,1500
+SERVO1_REVERSED,0           # Set to 1 if steering is backwards
+
+SERVO2_FUNCTION,70          # Throttle
+SERVO2_MIN,1000
+SERVO2_MAX,2000
+SERVO2_TRIM,1500
+SERVO2_REVERSED,0           # Set to 1 if motors run backwards
+
+# Steering
+STEER_TYPE,0                # Front steering (car-like)
+
+# Throttle
+MOT_THR_MIN,0
+MOT_THR_MAX,100
+
+# Speed
+CRUISE_SPEED,2              # m/s
+CRUISE_THROTTLE,50          # % throttle at cruise
+WP_SPEED,2                  # Waypoint nav speed m/s
+WP_RADIUS,2                 # Waypoint reach radius m
+SPEED_MAX,5                 # Max speed m/s
+
+# Safety
+FS_THR_ENABLE,1
+FS_THR_VALUE,950
+FS_ACTION,1                 # RTL on failsafe
+ARMING_CHECK,1              # Set to 0 for bench testing
+ARMING_REQUIRE,1
+
+# Initial Mode
+INITIAL_MODE,0              # Start in MANUAL
+
+# GPS/Compass
+GPS_TYPE,1                  # Auto detect
+COMPASS_USE,1
+COMPASS_AUTODEC,1
+
+================================================================================
+                          DRIVE MODES
+================================================================================
+
+  0 = MANUAL    Direct control
+  4 = HOLD      Stop and hold position
+  10 = AUTO     Follow waypoints
+  11 = RTL      Return to launch
+  15 = GUIDED   External guidance commands
+
+================================================================================
+                          TESTING
+================================================================================
+
+1. Set mode to MANUAL
+2. Arm: long press safety switch or arm via Mission Planner
+3. Test throttle - motors should respond via ESP32
+4. Test steering - servo should move
+5. Verify ESP32 STATUS shows correct PWM values:
+   - 1500us = neutral/stop
+   - 1000us = full reverse
+   - 2000us = full forward
+
+================================================================================
+                          TROUBLESHOOTING
+================================================================================
+
+No output when armed:
+  - Check SERVO1_FUNCTION = 26, SERVO2_FUNCTION = 70
+  - Verify safety switch state (BRD_SAFETY_DEFLT)
+
+Cannot arm:
+  - Mission Planner shows reason in HUD
+  - Common: GPS not locked, compass not calibrated
+  - Bench testing: set ARMING_CHECK = 0
+
+Steering/throttle reversed:
+  - Set SERVO1_REVERSED = 1 or SERVO2_REVERSED = 1
+
+Motors don't respond:
+  - Ensure ESP32 is in AUTO mode
+  - Check common ground between Cube and ESP32
+  - Verify GPIO34 connection
+
+================================================================================
+                          REFERENCE
+================================================================================
+
+PWM Values:
+  1000us = Full reverse / Full left
+  1500us = Neutral / Center
+  2000us = Full forward / Full right
+
+Key Functions:
+  26 = GroundSteering
+  70 = Throttle
+
+ESP32 Commands:
+  STATUS      Show PWM and motor state
+  MODE:AUTO   Accept Cube PWM input
+  MODE:MANUAL Accept serial commands
+  STOP        Emergency stop
+
+================================================================================

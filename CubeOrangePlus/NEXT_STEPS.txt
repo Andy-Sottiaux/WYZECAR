@@ -1,0 +1,225 @@
+================================================================================
+                         WYZECAR NEXT STEPS
+================================================================================
+
+Status: Bench tested with power supply - ESP32 + Cube Orange Plus working
+
+================================================================================
+                          HARDWARE TO GET
+================================================================================
+
+BATTERY
+-------
+Option 1: 2S-3S LiPo (7.4V-11.1V)
+  - 2200-5000mAh capacity
+  - XT60 connector (standard)
+  - Need: LiPo charger, voltage alarm
+
+Option 2: 2S-3S 18650 Li-ion pack
+  - Longer runtime, safer chemistry
+  - Need: BMS board, charger
+
+Recommended: 3S 2200mAh LiPo for good power/weight balance
+
+RC TRANSMITTER + RECEIVER
+-------------------------
+For manual override and mode switching:
+  - FlySky FS-i6X (~$50) - good budget option
+  - RadioMaster Zorro (~$100) - better quality
+  - Receiver connects to Cube RCIN port
+
+Minimum 6 channels:
+  - CH1: Steering
+  - CH2: Throttle
+  - CH3: Mode switch
+  - CH4-6: Aux functions
+
+GPS MODULE (if not included with Cube carrier)
+----------------------------------------------
+  - Here3 or Here4 GPS (CAN bus, plug and play)
+  - Or generic UBLOX M8N/M10 (UART)
+  - Required for: AUTO mode, RTL, waypoint navigation
+
+TELEMETRY (optional)
+--------------------
+  - SiK Radio pair (433MHz or 915MHz)
+  - Connects to Cube TELEM1 port
+  - Allows wireless Mission Planner connection
+
+================================================================================
+                          3D PRINT / ENCLOSURE
+================================================================================
+
+COMPONENTS TO HOUSE
+-------------------
+  - Cube Orange Plus (40x40mm mounting)
+  - ESP32 WROOM
+  - L298N motor driver
+  - GPS module + mast
+  - Battery compartment
+  - RC receiver
+
+DESIGN CONSIDERATIONS
+---------------------
+  - Ventilation for L298N (gets hot)
+  - USB access for ESP32 programming
+  - Easy battery swap
+  - GPS mounted high, away from motors
+  - Cube orientation marked (arrow forward)
+  - Wire routing channels
+
+MOUNTING
+--------
+  - Cube: M3 screws, 40mm square pattern
+  - ESP32: M2.5 screws or friction fit
+  - L298N: M3 screws, ~43x43mm pattern
+  - Consider vibration dampening for Cube
+
+================================================================================
+                     CAPABILITIES WITH CUBE ORANGE PLUS
+================================================================================
+
+AUTONOMOUS NAVIGATION
+---------------------
+  - Waypoint missions (plan in Mission Planner, execute in AUTO mode)
+  - Return to Launch (RTL) - automatic return home
+  - Loiter - hold position at GPS coordinate
+  - GeoFence - stay within defined boundary
+
+FOLLOW MODE
+-----------
+  - Follow a moving target (phone GPS, another vehicle)
+  - Requires telemetry link
+
+GUIDED MODE
+-----------
+  - Send real-time position commands via MAVLink
+  - Control from custom app or companion computer
+
+OBJECT AVOIDANCE (future)
+-------------------------
+  - Add ultrasonic sensors or lidar
+  - Cube supports proximity sensors via I2C or CAN
+
+COMPANION COMPUTER (future)
+---------------------------
+  - Add Raspberry Pi for computer vision
+  - Camera-based lane following
+  - Object detection and avoidance
+  - Connect via Cube TELEM2 port
+
+DATA LOGGING
+------------
+  - Onboard SD card logs all sensor data
+  - Review with Mission Planner log analyzer
+  - GPS tracks, speed, heading, battery, etc.
+
+================================================================================
+                          SOFTWARE TASKS
+================================================================================
+
+MISSION PLANNER
+---------------
+[ ] Create first waypoint mission
+[ ] Set up GeoFence boundary
+[ ] Configure failsafes (battery, RC loss, GPS loss)
+[ ] Tune speed/steering PID if needed
+
+ESP32 FIRMWARE
+--------------
+[ ] Add battery voltage monitoring (ADC pin)
+[ ] Add low battery warning/cutoff
+[ ] Consider OTA updates for field programming
+
+GUI ENHANCEMENTS (optional)
+---------------------------
+[ ] Add battery voltage display
+[ ] Add GPS position display
+[ ] Add mission status from Cube
+
+================================================================================
+                          TESTING PROGRESSION
+================================================================================
+
+1. BATTERY TEST (indoor)
+   - Connect battery instead of power supply
+   - Verify all voltages stable
+   - Test full throttle current draw
+   - Check for brownouts
+
+2. MANUAL DRIVE TEST (outdoor, open area)
+   - RC transmitter control
+   - Test steering range and response
+   - Test speed control
+   - Practice emergency stop
+
+3. HOLD MODE TEST
+   - Switch to HOLD mode while moving
+   - Verify vehicle stops and holds
+
+4. AUTO MODE TEST (simple mission)
+   - Create 3-4 waypoint square
+   - Low speed (1-2 m/s)
+   - Open area with good GPS
+   - Be ready to switch to MANUAL
+
+5. ADVANCED TESTING
+   - Longer missions
+   - RTL from various positions
+   - GeoFence breach response
+   - Failsafe testing
+
+================================================================================
+                          SAFETY CHECKLIST
+================================================================================
+
+Before each run:
+[ ] Battery charged and voltage checked
+[ ] Propellers/wheels secure
+[ ] GPS lock acquired (if using AUTO)
+[ ] Failsafes configured
+[ ] Kill switch accessible (RC or GCS)
+[ ] Clear area, no bystanders
+[ ] Know your RTL behavior
+
+================================================================================
+                          SHOPPING LIST
+================================================================================
+
+Essential:
+[ ] 3S LiPo battery (2200-3000mAh)
+[ ] LiPo charger
+[ ] XT60 connectors
+[ ] Battery voltage alarm
+[ ] RC transmitter + receiver (6+ ch)
+[ ] GPS module (if needed)
+
+Recommended:
+[ ] SiK telemetry radios
+[ ] Spare propellers/wheels
+[ ] Carrying case
+[ ] Field toolkit
+
+Future upgrades:
+[ ] Raspberry Pi 4/5 for computer vision
+[ ] Camera module
+[ ] Ultrasonic sensors
+[ ] Larger battery for extended runtime
+
+================================================================================
+                          RESOURCES
+================================================================================
+
+ArduRover Documentation:
+  https://ardupilot.org/rover/
+
+Mission Planner Download:
+  https://firmware.ardupilot.org/Tools/MissionPlanner/
+
+PID Tuning Guide:
+  https://ardupilot.org/rover/docs/rover-tuning-steering-rate.html
+
+MAVLink Protocol:
+  https://mavlink.io/en/
+
+================================================================================

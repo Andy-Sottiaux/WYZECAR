@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsusb:*)",
+      "Bash(groups:*)",
+      "WebSearch",
+      "WebFetch(domain:variwiki.com)",
+      "WebFetch(domain:variscite.com)"
+    ]
+  }
+}

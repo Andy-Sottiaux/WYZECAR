@@ -1,0 +1,348 @@
+================================================================================
+                    WYZECAR - DART MX95 + SONATA CARRIER
+                              WIRING GUIDE
+================================================================================
+
+CONFIGURATION:
+  Camera: CUM10330_MOD (3.4MP via USB-C)
+  Detection: YOLOv8-nano
+  Motor Control: Direct GPIO/PWM from Dart MX95
+
+================================================================================
+                          POWER DISTRIBUTION
+================================================================================
+
+                         WALL ADAPTER (Dart MX95)
+                                   |
+                                   v
+                         Sonata 12V DC Jack (J30)
+                                   |
+                         Sonata Power Regulators
+                                   |
+                              DART MX95
+
+
+                         LAB PSU (0-30V, 0-10A)
+                                   |
+                                   v
+                            L298N +12V (set to 7-12V)
+                                   |
+                    +--------------+--------------+
+                    |              |              |
+                    v              v              v
+                 Motors      L298N 5V         L298N GND
+                            Regulator              |
+                                |                  |
+                                v                  |
+                           Servo 5V                |
+                                |                  |
+                                +--------+---------+
+                                         |
+                                    COMMON GND
+                                         |
+                              Sonata GND (J6/J7/J8)
+
+================================================================================
+                     DART-MX95 GPIO PINS (from Sonata Datasheet)
+================================================================================
+
+Source: Sonata-Board Datasheet Rev 1.2, 07/2025
+
+IMPORTANT SWITCH SETTINGS FOR DART-MX95:
+----------------------------------------
+  SW1  (Power Select) --> ON  (connects SOM power to J3.15, 27, 34 & 63)
+  SW10 (NXP Workaround) --> ON  (required for DART-MX95 bring up)
+  SW8  (Boot Select) --> OFF for eMMC, ON for SD Card
+
+GPIO HEADER J8 (10-pin, 2.54mm pitch) - DIRECTLY ACCESSIBLE:
+------------------------------------------------------------
+Pin    Signal          Type    Use For
+---    ------          ----    -------
+1      BASE_PER_3V3    P       3.3V reference
+2      GPIO1_IO11      IO      IN1 (Motor 1 Dir A)
+3      SPDIF_RX        IO      (connected to CAN-FD, avoid)
+4      GPIO1_IO12      IO      IN2 (Motor 1 Dir B)
+5      SPDIF_EXT_CLK   IO      ENA (Motor 1 PWM)
+6      GPIO1_IO08      IO      IN3 (Motor 2 Dir A)
+7      SPDIF_TX        IO      (connected to CAN-FD, avoid)
+8      GPIO1_IO15      IO      IN4 (Motor 2 Dir B)
+9      GND             P       Common Ground
+10     GPIO1_IO06      IO      ENB (Motor 2 PWM)
+
+SAI2/SAI5 HEADER J7 (20-pin, 2.54mm pitch) - DIRECTLY ACCESSIBLE:
+-----------------------------------------------------------------
+Pin    Signal          Type    Use For
+---    ------          ----    -------
+1      CAN_H           IO      (CAN Bus - don't use)
+2      CAN_L           IO      (CAN Bus - don't use)
+3      BASE_PER_1V8    P       1.8V reference (don't use for L298N)
+4      GND             P       Common Ground
+5      SAI2_RXC        IO      Servo PWM
+7      SAI2_RXFS       IO      (spare)
+9      SAI2_RXD0       IO      (spare)
+11     SAI2_TXC        IO      (spare)
+13     SAI2_TXFS       IO      (spare)
+15     SAI2_TXD0       IO      (spare)
+17     SAI2_MCLK       IO      (spare)
+
+NOTE: J8 GPIO pins are 3.3V level - compatible with L298N inputs.
+
+================================================================================
+                          ACTIVE HEADER PINOUT
+================================================================================
+
+We'll use J8 header (10-pin GPIO/SPDIF) on Sonata for motor control.
+All GPIO pins are 3.3V level - compatible with L298N inputs directly.
+
+RECOMMENDED PINOUT (Using J8 + J7 Headers):
+-------------------------------------------
+J8 Pin    Signal          L298N           Function
+------    ------          -----           --------
+1         BASE_PER_3V3    -               3.3V reference (do not use for power)
+2         GPIO1_IO11      IN1             Motor 1 Direction A
+3         SPDIF_RX        -               (avoid - connected to CAN-FD)
+4         GPIO1_IO12      IN2             Motor 1 Direction B
+5         SPDIF_EXT_CLK   ENA             Motor 1 Speed (software PWM)
+6         GPIO1_IO08      IN3             Motor 2 Direction A
+7         SPDIF_TX        -               (avoid - connected to CAN-FD)
+8         GPIO1_IO15      IN4             Motor 2 Direction B
+9         GND             GND             Common Ground
+10        GPIO1_IO06      ENB             Motor 2 Speed (software PWM)
+
+J7 Pin    Signal          Servo           Function
+------    ------          -----           --------
+4         GND             -               (use J8.9 for common ground)
+5         SAI2_RXC        Signal          Servo PWM (50Hz, software PWM)
+
+NOTE: Both ENA (J8.5) and ENB (J8.10) use software PWM for motor speed control.
+      Servo uses J7.5 (SAI2_RXC) for independent PWM control.
+
+================================================================================
+                     GPIO ACCESS METHOD
+================================================================================
+
+Using software PWM via libgpiod for motor speed and servo control.
+This is simpler than hardware PWM routing and sufficient for this application.
+
+Software PWM Implementation:
+---------------------------
+- Motor PWM: ~1kHz frequency, 0-100% duty cycle for speed
+- Servo PWM: 50Hz frequency, 1-2ms pulse width for position
+- Use Python gpiod library or direct sysfs GPIO control
+- Timing via high-resolution timers (usleep/nanosleep)
+
+================================================================================
+                          WIRING DIAGRAM
+================================================================================
+
+                        SONATA BOARD (J8 + J7 Headers)
+                   +------------------------------------+
+                   |  J8 (10-pin GPIO/SPDIF)            |
+                   |  Pin 2  (GPIO1_IO11) ---|--> IN1   |
+                   |  Pin 4  (GPIO1_IO12) ---|--> IN2   |
+                   |  Pin 5  (SPDIF_EXT)  ---|--> ENA   |
+                   |  Pin 6  (GPIO1_IO08) ---|--> IN3   |
+                   |  Pin 8  (GPIO1_IO15) ---|--> IN4   |
+                   |  Pin 9  (GND) ----------+--> GND   |
+                   |  Pin 10 (GPIO1_IO06) ---|--> ENB   |
+                   |                                    |
+                   |  J7 (20-pin SAI2/SAI5)             |
+                   |  Pin 5  (SAI2_RXC) -----|--> Servo |
+                   +------------------------------------+
+                              |
+                              v
+                        L298N MODULE
+        +------------------------------------+
+        |                                    |
+        |  +12V  GND  +5V                    |
+        |   o     o    o                     |
+        |   ^     |    +-- To Servo 5V       |
+        |   |     +------- To Sonata GND     |
+        |   +------------- Lab PSU +         |
+        |                                    |
+        |  [5V REG JUMPER] <-- ON            |
+        |                                    |
+        |  ENA  IN1  IN2  IN3  IN4  ENB      |
+        |   o    o    o    o    o    o       |
+        |   ^    ^    ^    ^    ^    ^       |
+        |   |    |    |    |    |    |       |
+        |  J8.5 J8.2 J8.4 J8.6 J8.8 J8.10   |
+        +------------------------------------+
+
+
+                    STEERING SERVO
+                   +--------------+
+                   |              |
+                   |   Signal o---+---> Sonata J7.5 (SAI2_RXC)
+                   |      5V  o---+---> L298N 5V Output
+                   |     GND  o---+---> Common GND
+                   |              |
+                   +--------------+
+
+
+                    CUM10330_MOD CAMERA
+                   +------------------+
+                   |                  |
+                   |   USB-C port o---+--> USB-C cable --> Sonata USB-C port
+                   |   (on ISP board) |
+                   |                  |
+                   +------------------+
+
+================================================================================
+                          CONNECTION TABLE
+================================================================================
+
+MOTOR CONTROL (Sonata J8 to L298N):
+-----------------------------------
+Sonata Pin    Signal         L298N Pin     Function
+----------    ------         ---------     --------
+J8.9          GND            GND           Common Ground
+J8.2          GPIO1_IO11     IN1           Motor 1 Direction A
+J8.4          GPIO1_IO12     IN2           Motor 1 Direction B
+J8.5          SPDIF_EXT_CLK  ENA           Motor 1 Speed (software PWM)
+J8.6          GPIO1_IO08     IN3           Motor 2 Direction A
+J8.8          GPIO1_IO15     IN4           Motor 2 Direction B
+J8.10         GPIO1_IO06     ENB           Motor 2 Speed (software PWM)
+
+STEERING SERVO:
+---------------
+Sonata Pin    Signal         Servo Pin     Function
+----------    ------         ---------     --------
+J7.5          SAI2_RXC       Signal        Servo PWM (50Hz, software PWM)
+L298N         +5V            5V            Servo Power
+L298N         GND            GND           Ground
+
+CAMERA:
+-------
+Sonata Connector    Camera              Function
+----------------    ------              --------
+USB-C port          CUM10330_MOD        USB video (via ISP board)
+
+POWER:
+------
+Source              Destination         Notes
+------              -----------         -----
+Wall adapter        Sonata J30          12V DC for Dart MX95
+Lab PSU             L298N +12V          Set to 7-12V for motors
+L298N 5V output     Servo 5V            Regulated 5V
+All GNDs            Connected together  Common ground required
+
+================================================================================
+                     LINUX GPIO/PWM INTERFACE
+================================================================================
+
+After booting Debian, check available GPIO:
+
+  # List GPIO chips
+  ls /sys/class/gpio/
+
+  # List PWM controllers
+  ls /sys/class/pwm/
+
+  # Check device tree for pin assignments
+  cat /proc/device-tree/...
+
+GPIO Control (using libgpiod):
+------------------------------
+  # Install libgpiod
+  apt install gpiod libgpiod-dev
+
+  # List GPIO lines
+  gpioinfo
+
+  # Set output high
+  gpioset gpiochip0 <line>=1
+
+  # Set output low
+  gpioset gpiochip0 <line>=0
+
+Software PWM (if hardware PWM not available):
+---------------------------------------------
+  # Use Python RPi.GPIO-style library or
+  # Write custom PWM using high-res timers
+  # ~1kHz for motors, 50Hz for servo
+
+Hardware PWM (if exposed):
+--------------------------
+  echo 0 > /sys/class/pwm/pwmchip0/export
+  echo 20000000 > /sys/class/pwm/pwmchip0/pwm0/period      # 50Hz
+  echo 1500000 > /sys/class/pwm/pwmchip0/pwm0/duty_cycle   # 1.5ms
+  echo 1 > /sys/class/pwm/pwmchip0/pwm0/enable
+
+================================================================================
+                          FIRST STEPS
+================================================================================
+
+1. VERIFY HEADER ACCESS
+   - Power up Sonata with Dart MX95
+   - Ensure SW1=ON, SW10=ON (required for DART-MX95)
+   - Boot Debian
+   - Run: gpioinfo
+   - Identify which GPIO chips/lines map to J8 pins
+
+2. TEST GPIO OUTPUT
+   - Connect LED + 330ohm resistor to J8.2 (GPIO1_IO11)
+   - Toggle with: gpioset gpiochipX <line>=1
+   - Verify 3.3V output with multimeter
+
+3. WIRE L298N (one motor first)
+   - Connect J8.9 (GND) to L298N GND
+   - Connect J8.2 (GPIO1_IO11) to IN1
+   - Connect J8.4 (GPIO1_IO12) to IN2
+   - Connect J8.5 (SPDIF_EXT_CLK) to ENA
+   - Power L298N from lab PSU (start at 7V)
+   - Test direction control with gpioset
+
+4. ADD SERVO
+   - Connect J8.10 (GPIO1_IO06) to servo signal
+   - Test with software PWM at 50Hz
+   - Verify servo responds to 1-2ms pulses
+
+5. CONNECT CAMERA
+   - Connect USB-C cable from CUM10330_MOD to Sonata USB-C port
+   - Boot, check /dev/video*
+   - Test with v4l2-ctl or lsusb
+
+================================================================================
+                          NOTES
+================================================================================
+
+VOLTAGE LEVELS:
+- Sonata GPIO: 3.3V logic
+- L298N inputs: 3.3V compatible (TTL levels)
+- Servo signal: 3.3V compatible (most servos work with 3.3V signal)
+
+CURRENT:
+- Sonata GPIO: ~4-8mA max per pin
+- L298N inputs: ~1mA (high impedance)
+- OK to drive directly
+
+GROUND:
+- All grounds MUST be connected together
+- Sonata GND + L298N GND + Lab PSU GND
+
+ISOLATION:
+- For safety, keep motor power (lab PSU) separate from logic power
+- Add flyback diodes if not built into L298N
+- Consider optoisolators for production design
+
+================================================================================
+                          TODO: PIN VERIFICATION
+================================================================================
+
+[ ] Boot Dart MX95 with Debian
+[ ] Run gpioinfo to list available GPIO chips and lines
+[ ] Find the gpiochip and line numbers for:
+    - GPIO1_IO11 (J8.2)  --> IN1
+    - GPIO1_IO12 (J8.4)  --> IN2
+    - GPIO1_IO08 (J8.6)  --> IN3
+    - GPIO1_IO15 (J8.8)  --> IN4
+    - SPDIF_EXT_CLK (J8.5) --> ENA
+    - GPIO1_IO06 (J8.10) --> ENB
+    - SAI2_RXC (J7.5) --> Servo
+[ ] Test each pin with LED + resistor before connecting L298N
+[ ] Verify 3.3V output with multimeter
+[ ] Check /sys/class/pwm/ for any hardware PWM available
+[ ] Update motor_controller.py with actual gpiochip/line numbers
+
+================================================================================

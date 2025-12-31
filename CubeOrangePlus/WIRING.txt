@@ -1,0 +1,247 @@
+================================================================================
+      WIRING: ESP32 WROOM + L298N + CUBE ORANGE PLUS + STEERING SERVO
+================================================================================
+
+SYSTEM OVERVIEW
+---------------
+- Cube Orange Plus: Autopilot running ArduRover
+- ESP32 WROOM: Motor controller (receives throttle PWM from Cube)
+- L298N: Dual H-Bridge motor driver for DC motors
+- Steering Servo: Signal from Cube, powered by L298N 5V regulator
+
+Signal Flow:
+  Cube --[Throttle PWM]--> ESP32 --[Direction + PWM]--> L298N --> Motors
+  Cube --[Steering PWM]--> Servo (signal only, power from L298N)
+
+================================================================================
+                          POWER DISTRIBUTION
+================================================================================
+
+                         MAIN BATTERY (7-12V)
+                                   |
+                +------------------+------------------+
+                |                                     |
+                v                                     v
+           L298N +12V                            5V BEC Input
+                |                                     |
+    +-----------+-----------+                         v
+    |           |           |                  Cube POWER1 (5V)
+    v           v           v
+ Motors     L298N 5V    L298N GND
+            Regulator        |
+                |            |
+       +--------+--------+   |
+       |        |        |   |
+       v        v        v   |
+   ESP32 VIN  Servo 5V   +---+
+                |            |
+                +------+-----+
+                       |
+                  COMMON GND
+
+Power Requirements:
+- L298N 5V regulator: Powers ESP32 (~150mA) + Servo (tested, no jitter)
+- 5V BEC: Powers Cube only (~300mA) - can use smaller BEC since servo is separate
+
+================================================================================
+                              WIRING DIAGRAM
+================================================================================
+
+                     CUBE ORANGE PLUS
+        +----------------------------------------+
+        |                                        |
+        |  POWER1 <-- 5V BEC from main battery   |
+        |                                        |
+        |  MAIN OUT                              |
+        |  +---+---+---+---+---+---+---+---+    |
+        |  | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |    |
+        |  +---+---+---+---+---+---+---+---+    |
+        |    |   |                              |
+        |    |   +-----> ESP32 GPIO34           |
+        |    |           (Signal + GND only)    |
+        |    |                                  |
+        |    +--------> Servo SIGNAL            |
+        |               (Signal wire only!)     |
+        +----------------------------------------+
+
+
+                       ESP32 WROOM
+                   +------------------+
+                   |      USB         |
+                   |                  |
+              3V3  | o            o | VIN <-------- L298N 5V
+              GND  | o            o | GND --------> L298N GND
+              D15  | o            o | D13 (GPIO13) -> IN4
+              D2   | o            o | D12 (GPIO12) -> IN3
+              D4   | o            o | D14 (GPIO14) -> ENB
+         RX0  D3   | o            o | D27 (GPIO27) -> IN2
+         TX0  D1   | o            o | D26 (GPIO26) -> IN1
+              D21  | o            o | D25 (GPIO25) -> ENA
+              D19  | o            o | D33
+              D18  | o            o | D32
+              D5   | o            o | D35
+              D17  | o            o | D34 (GPIO34) <- Cube MAIN OUT 2
+              D16  | o            o | VN
+              D4   | o            o | VP
+                   |      EN  BOOT  |
+                   +------------------+
+
+
+                      L298N MODULE
+        +------------------------------------+
+        |                                    |
+        |  +12V  GND  +5V                    |
+        |   o     o    o                     |
+        |   ^     ^    +-- To ESP32 VIN      |
+        |   |     |    +-- To Servo 5V       |
+        |   |     +------- Common Ground     |
+        |   +------------- Main Battery +    |
+        |                                    |
+        |  [5V REG JUMPER] <-- Must be ON    |
+        |                                    |
+        |  ENA  IN1  IN2  IN3  IN4  ENB      |
+        |   o    o    o    o    o    o       |
+        +------------------------------------+
+            |    |    |    |    |    |
+            |    |    |    |    |    +-------> GPIO14
+            |    |    |    |    +-----------> GPIO13
+            |    |    |    +----------------> GPIO12
+            |    |    +---------------------> GPIO27
+            |    +--------------------------> GPIO26
+            +-------------------------------> GPIO25
+
+
+                    STEERING SERVO
+                   +--------------+
+                   |              |
+                   |   Signal o---+---> Cube MAIN OUT 1 (Signal only)
+                   |      5V  o---+---> L298N 5V Output
+                   |     GND  o---+---> Common GND
+                   |              |
+                   +--------------+
+
+================================================================================
+                          CONNECTION TABLE
+================================================================================
+
+ESP32 TO L298N:
+---------------
+ESP32 Pin     L298N Pin     Function
+---------     ---------     --------
+VIN           +5V           ESP32 Power
+GND           GND           Common Ground
+GPIO25        ENA           Motor 1 PWM
+GPIO26        IN1           Motor 1 Direction A
+GPIO27        IN2           Motor 1 Direction B
+GPIO12        IN3           Motor 2 Direction A
+GPIO13        IN4           Motor 2 Direction B
+GPIO14        ENB           Motor 2 PWM
+
+CUBE TO ESP32:
+--------------
+Cube Pin           ESP32 Pin    Function
+--------           ---------    --------
+MAIN OUT 2 (Sig)   GPIO34       Throttle PWM Input
+MAIN OUT 2 (GND)   GND          Common Ground
+
+CUBE TO STEERING SERVO:
+-----------------------
+Cube Pin           Servo Pin    Function
+--------           ---------    --------
+MAIN OUT 1 (Sig)   Signal       Steering PWM
+
+STEERING SERVO POWER (from L298N):
+----------------------------------
+L298N Pin          Servo Pin    Function
+---------          ---------    --------
++5V                5V           Servo Power
+GND                GND          Common Ground
+
+CUBE POWER:
+-----------
+BEC Output         Cube Pin     Function
+----------         --------     --------
++5V                POWER1 (+)   Main power
+GND                POWER1 (-)   Ground
+
+MOTORS:
+-------
+Motor 1 (Left):  L298N OUT1/OUT2
+Motor 2 (Right): L298N OUT3/OUT4
+
+Note: Swap wires if motor direction is reversed.
+
+================================================================================
+                     GROUND CONNECTIONS (CRITICAL!)
+================================================================================
+
+All grounds MUST be connected together:
+
+  +-- Main Battery GND
+  |
+  +-- L298N GND terminal
+  |
+  +-- ESP32 GND
+  |
+  +-- Cube GND (via POWER1 or any GND pin)
+  |
+  +-- 5V BEC GND
+  |
+  +-- Steering Servo GND
+
+================================================================================
+                          WIRING CHECKLIST
+================================================================================
+
+POWER:
+[ ] Main battery to L298N +12V
+[ ] Main battery to 5V BEC input
+[ ] L298N 5V jumper installed (ON)
+[ ] L298N 5V to ESP32 VIN
+[ ] L298N 5V to Servo 5V
+[ ] 5V BEC output to Cube POWER1
+
+MOTOR CONTROL (ESP32 to L298N):
+[ ] GPIO25 to ENA
+[ ] GPIO26 to IN1
+[ ] GPIO27 to IN2
+[ ] GPIO12 to IN3
+[ ] GPIO13 to IN4
+[ ] GPIO14 to ENB
+
+CUBE SIGNALS:
+[ ] MAIN OUT 1 signal to Servo signal
+[ ] MAIN OUT 2 signal to ESP32 GPIO34
+[ ] Cube GND to common ground
+
+MOTORS:
+[ ] Motor 1 to OUT1/OUT2
+[ ] Motor 2 to OUT3/OUT4
+
+GROUND:
+[ ] All grounds connected together
+
+================================================================================
+                          TROUBLESHOOTING
+================================================================================
+
+ESP32 not powering on:
+  - Check L298N 5V jumper is installed
+  - Verify 7-12V at L298N +12V terminal
+
+Motors don't move:
+  - Check all GND connections
+  - Use STATUS command to check PWM signal
+  - Verify ESP32 is in correct mode (AUTO or MANUAL)
+
+No PWM signal from Cube:
+  - Ensure Cube is ARMED
+  - Check GPIO34 connection
+  - Verify common ground between Cube and ESP32
+
+Steering servo doesn't move:
+  - Check servo 5V connection to L298N
+  - Verify MAIN OUT 1 signal connection
+  - Check ArduRover SERVO1_FUNCTION = 26
+
+================================================================================

@@ -1,0 +1,1051 @@
+================================================================================
+                   WYZECAR - DART MX95 SETUP GUIDE
+                        Step-by-Step Instructions
+================================================================================
+
+CONFIGURATION:
+  SoM: Variscite DART-MX95 + Sonata Carrier
+  Camera: CUM10330_MOD (3.4MP via USB-C)
+  Detection: YOLOv8-nano
+  Motor Control: Direct GPIO/PWM
+  Software: Debian (host) + Ubuntu 22.04/ROS2 Humble (Docker)
+
+================================================================================
+                         PHASE 1: INITIAL SETUP
+================================================================================
+
+STEP 1.1: VERIFY SWITCH SETTINGS (CRITICAL!)
+--------------------------------------------
+Before powering on, verify these switches on the Sonata board:
+
+   SW1  (Power Select) --> ON  (connects SOM power)
+   SW10 (NXP Workaround) --> ON  (required for DART-MX95 bring up)
+   SW8  (Boot Select) --> OFF for eMMC boot, ON for SD Card boot
+
+STEP 1.2: BOOT AND CONNECT
+--------------------------
+1. Connect Dart MX95/Sonata to wall adapter (12V DC to J30)
+2. Connect USB keyboard and HDMI monitor (or use serial console)
+3. Power on and wait for Debian to boot
+4. Log in (default credentials - check Variscite docs)
+
+STEP 1.3: NETWORK SETUP
+-----------------------
+1. Connect Ethernet cable to one of the RJ45 ports
+   OR configure WiFi:
+
+   nmcli device wifi list
+   nmcli device wifi connect "YOUR_SSID" password "YOUR_PASSWORD"
+
+2. Verify connection:
+
+   ip addr
+   ping -c 3 google.com
+
+3. Update system:
+
+   sudo apt update && sudo apt upgrade -y
+
+STEP 1.4: INSTALL ESSENTIAL TOOLS
+---------------------------------
+   sudo apt install -y \
+     git \
+     vim \
+     htop \
+     i2c-tools \
+     gpiod \
+     libgpiod-dev \
+     v4l-utils \
+     docker.io \
+     docker-compose
+
+STEP 1.5: CONFIGURE DOCKER
+--------------------------
+1. Add your user to docker group:
+
+   sudo usermod -aG docker $USER
+
+2. Log out and back in (or reboot)
+
+3. Verify docker works:
+
+   docker run --rm hello-world
+
+================================================================================
+                      PHASE 2: GPIO/PWM DISCOVERY
+================================================================================
+
+STEP 2.1: LIST GPIO CHIPS
+-------------------------
+   gpioinfo
+
+   Expected output shows gpiochip0, gpiochip1, etc. with line names.
+   Look for GPIO1_* signals - these are on J8 header.
+
+STEP 2.2: IDENTIFY J8 HEADER PINS
+---------------------------------
+Look for these signal names in gpioinfo output:
+
+   Signal Name      Header    Expected Use
+   -----------      ------    ------------
+   GPIO1_IO11       J8.2      IN1 (Motor 1 Dir A)
+   GPIO1_IO12       J8.4      IN2 (Motor 1 Dir B)
+   GPIO1_IO08       J8.6      IN3 (Motor 2 Dir A)
+   GPIO1_IO15       J8.8      IN4 (Motor 2 Dir B)
+   SPDIF_EXT_CLK    J8.5      ENA (Motor 1 PWM)
+   GPIO1_IO06       J8.10     ENB (Motor 2 PWM)
+   SAI2_RXC         J7.5      Servo PWM
+
+Record the gpiochip number and line number for each:
+
+   GPIO1_IO11:    gpiochip___ line ___  (IN1)
+   GPIO1_IO12:    gpiochip___ line ___  (IN2)
+   GPIO1_IO08:    gpiochip___ line ___  (IN3)
+   GPIO1_IO15:    gpiochip___ line ___  (IN4)
+   SPDIF_EXT_CLK: gpiochip___ line ___  (ENA)
+   GPIO1_IO06:    gpiochip___ line ___  (ENB)
+   SAI2_RXC:      gpiochip___ line ___  (Servo)
+
+STEP 2.3: CHECK FOR HARDWARE PWM
+--------------------------------
+   ls /sys/class/pwm/
+
+If pwmchip0 (or similar) exists, hardware PWM is available.
+Check how many channels:
+
+   cat /sys/class/pwm/pwmchip0/npwm
+
+If no pwmchip exists, we'll use software PWM (still works fine).
+
+STEP 2.4: TEST GPIO OUTPUT
+--------------------------
+Before connecting anything, test with an LED + 330 ohm resistor.
+
+1. Connect LED anode (long leg) to J8.2 (GPIO1_IO11)
+2. Connect LED cathode (short leg) through resistor to J8.9 (GND)
+
+3. Find the GPIO line number from Step 2.2, then:
+
+   # Replace X with gpiochip number, Y with line number
+   gpioset gpiochipX Y=1    # LED should turn ON
+   gpioset gpiochipX Y=0    # LED should turn OFF
+
+4. Repeat for J8.4, J8.6, J8.8 to verify all direction control pins work.
+
+================================================================================
+                      PHASE 3: CAMERA SETUP
+================================================================================
+
+STEP 3.1: CONNECT CAMERA
+------------------------
+1. Connect USB-C cable from CUM10330_MOD (ISP board) to Sonata USB-C port
+2. That's it - no ribbon cables or special connectors needed
+
+STEP 3.2: VERIFY CAMERA DETECTION
+---------------------------------
+   # Check USB devices
+   lsusb
+
+   # Should show camera device in list
+
+   # Check video devices
+   ls /dev/video*
+
+   # Should see /dev/video0 (or similar)
+
+   v4l2-ctl --list-devices
+
+   # Should show the camera device
+
+STEP 3.3: TEST CAMERA CAPTURE
+-----------------------------
+   # Check supported formats
+   v4l2-ctl -d /dev/video0 --list-formats-ext
+
+   # Capture a test frame
+   v4l2-ctl -d /dev/video0 --set-fmt-video=width=1920,height=1080,pixelformat=YUYV
+   v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=1 --stream-to=test.raw
+
+   # Or use fswebcam if available
+   sudo apt install fswebcam
+   fswebcam -d /dev/video0 -r 1920x1080 test.jpg
+
+Note: USB camera may appear as /dev/video0, /dev/video1, etc.
+      Use v4l2-ctl --list-devices to identify correct device.
+
+================================================================================
+                      PHASE 4: DOCKER + ROS2 SETUP
+================================================================================
+
+STEP 4.1: CREATE PROJECT DIRECTORY
+----------------------------------
+   mkdir -p ~/wyzecar_ws/src
+   cd ~/wyzecar_ws
+
+STEP 4.2: CREATE DOCKERFILE
+---------------------------
+Create file: ~/wyzecar_ws/Dockerfile
+
+---BEGIN FILE---
+FROM arm64v8/ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ROS_DISTRO=humble
+
+# Set locale
+RUN apt update && apt install -y locales && \
+    locale-gen en_US en_US.UTF-8 && \
+    update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+
+# Install dependencies
+RUN apt update && apt install -y \
+    curl \
+    gnupg2 \
+    lsb-release \
+    software-properties-common \
+    build-essential \
+    cmake \
+    git \
+    python3-pip \
+    python3-opencv \
+    libopencv-dev \
+    v4l-utils \
+    libgpiod-dev \
+    gpiod
+
+# Add ROS2 repository
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+    http://packages.ros.org/ros2/ubuntu jammy main" \
+    > /etc/apt/sources.list.d/ros2.list
+
+# Install ROS2 Humble
+RUN apt update && apt install -y \
+    ros-humble-ros-base \
+    ros-humble-cv-bridge \
+    ros-humble-image-transport \
+    ros-humble-v4l2-camera \
+    ros-humble-vision-msgs \
+    python3-colcon-common-extensions \
+    python3-rosdep
+
+# Install Python packages for ML
+RUN pip3 install \
+    ultralytics \
+    numpy \
+    gpiod
+
+# Initialize rosdep
+RUN rosdep init && rosdep update
+
+# Setup entrypoint
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
+WORKDIR /ros2_ws
+
+CMD ["/bin/bash"]
+---END FILE---
+
+STEP 4.3: BUILD DOCKER IMAGE
+----------------------------
+   cd ~/wyzecar_ws
+   docker build -t wyzecar-ros2 .
+
+This takes 10-30 minutes on first build.
+
+STEP 4.4: CREATE DOCKER RUN SCRIPT
+----------------------------------
+Create file: ~/wyzecar_ws/run_docker.sh
+
+---BEGIN FILE---
+#!/bin/bash
+docker run -it --rm \
+    --name wyzecar \
+    --privileged \
+    --net=host \
+    -v /dev:/dev \
+    -v /sys:/sys \
+    -v ~/wyzecar_ws/src:/ros2_ws/src \
+    -e DISPLAY=$DISPLAY \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    wyzecar-ros2
+---END FILE---
+
+   chmod +x ~/wyzecar_ws/run_docker.sh
+
+STEP 4.5: TEST DOCKER CONTAINER
+-------------------------------
+   cd ~/wyzecar_ws
+   ./run_docker.sh
+
+Inside container:
+   source /opt/ros/humble/setup.bash
+   ros2 --help
+
+Should show ROS2 help. Type 'exit' to leave container.
+
+================================================================================
+                    PHASE 5: CREATE ROS2 PACKAGES
+================================================================================
+
+STEP 5.1: START DOCKER AND CREATE WORKSPACE
+-------------------------------------------
+   cd ~/wyzecar_ws
+   ./run_docker.sh
+
+Inside container:
+   cd /ros2_ws
+   source /opt/ros/humble/setup.bash
+
+STEP 5.2: CREATE MOTOR CONTROLLER PACKAGE
+-----------------------------------------
+   cd /ros2_ws/src
+   ros2 pkg create --build-type ament_python wyzecar_motor \
+       --dependencies rclpy geometry_msgs std_msgs
+
+STEP 5.3: CREATE MOTOR CONTROLLER NODE
+--------------------------------------
+Edit: /ros2_ws/src/wyzecar_motor/wyzecar_motor/motor_controller.py
+
+---BEGIN FILE---
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+import gpiod
+import time
+import threading
+
+class MotorController(Node):
+    def __init__(self):
+        super().__init__('motor_controller')
+
+        # Declare parameters (UPDATE THESE after GPIO discovery)
+        # J8 header pins (motor control)
+        self.declare_parameter('gpio_chip', 'gpiochip0')
+        self.declare_parameter('in1_line', 0)  # J8.2 - Motor 1 Dir A
+        self.declare_parameter('in2_line', 1)  # J8.4 - Motor 1 Dir B
+        self.declare_parameter('in3_line', 2)  # J8.6 - Motor 2 Dir A
+        self.declare_parameter('in4_line', 3)  # J8.8 - Motor 2 Dir B
+        self.declare_parameter('ena_line', 4)  # J8.5 - Motor 1 PWM
+        self.declare_parameter('enb_line', 5)  # J8.10 - Motor 2 PWM
+        # J7 header pin (servo control) - may be on different gpiochip
+        self.declare_parameter('servo_chip', 'gpiochip0')
+        self.declare_parameter('servo_line', 6)  # J7.5 - Servo PWM
+
+        # Get parameters
+        chip_name = self.get_parameter('gpio_chip').value
+        servo_chip_name = self.get_parameter('servo_chip').value
+        self.in1 = self.get_parameter('in1_line').value
+        self.in2 = self.get_parameter('in2_line').value
+        self.in3 = self.get_parameter('in3_line').value
+        self.in4 = self.get_parameter('in4_line').value
+        self.ena = self.get_parameter('ena_line').value
+        self.enb = self.get_parameter('enb_line').value
+        self.servo = self.get_parameter('servo_line').value
+
+        # Setup GPIO
+        self.chip = gpiod.Chip(chip_name)
+        self.servo_chip = gpiod.Chip(servo_chip_name) if servo_chip_name != chip_name else self.chip
+        self.lines = {
+            'in1': self.chip.get_line(self.in1),
+            'in2': self.chip.get_line(self.in2),
+            'in3': self.chip.get_line(self.in3),
+            'in4': self.chip.get_line(self.in4),
+            'ena': self.chip.get_line(self.ena),
+            'enb': self.chip.get_line(self.enb),
+            'servo': self.servo_chip.get_line(self.servo),
+        }
+
+        # Request all lines as output
+        for name, line in self.lines.items():
+            line.request(consumer='wyzecar', type=gpiod.LINE_REQ_DIR_OUT)
+
+        # PWM state
+        self.motor_speed = 0.0  # 0-100%
+        self.servo_angle = 90  # 0-180 degrees
+        self.pwm_running = True
+
+        # Start software PWM threads
+        self.motor_pwm_thread = threading.Thread(target=self._motor_pwm_loop)
+        self.servo_pwm_thread = threading.Thread(target=self._servo_pwm_loop)
+        self.motor_pwm_thread.start()
+        self.servo_pwm_thread.start()
+
+        # Subscribe to cmd_vel
+        self.subscription = self.create_subscription(
+            Twist,
+            'cmd_vel',
+            self.cmd_vel_callback,
+            10
+        )
+
+        self.get_logger().info('Motor controller initialized')
+
+    def _motor_pwm_loop(self):
+        """Software PWM for motor speed (1kHz)"""
+        period = 0.001  # 1ms = 1kHz
+        while self.pwm_running:
+            if self.motor_speed > 0:
+                on_time = period * (self.motor_speed / 100.0)
+                off_time = period - on_time
+                self.lines['ena'].set_value(1)
+                self.lines['enb'].set_value(1)
+                time.sleep(on_time)
+                self.lines['ena'].set_value(0)
+                self.lines['enb'].set_value(0)
+                time.sleep(off_time)
+            else:
+                self.lines['ena'].set_value(0)
+                self.lines['enb'].set_value(0)
+                time.sleep(period)
+
+    def _servo_pwm_loop(self):
+        """Software PWM for servo (50Hz)"""
+        period = 0.02  # 20ms = 50Hz
+        while self.pwm_running:
+            # Map angle to pulse width: 0°=0.5ms, 90°=1.5ms, 180°=2.5ms
+            pulse_width = 0.0005 + (self.servo_angle / 180.0) * 0.002
+            self.lines['servo'].set_value(1)
+            time.sleep(pulse_width)
+            self.lines['servo'].set_value(0)
+            time.sleep(period - pulse_width)
+
+    def cmd_vel_callback(self, msg):
+        """Handle velocity commands"""
+        linear_x = msg.linear.x   # Forward/backward (-1 to 1)
+        angular_z = msg.angular.z  # Steering (-1 to 1)
+
+        # Set motor direction
+        if linear_x > 0:
+            # Forward
+            self.lines['in1'].set_value(1)
+            self.lines['in2'].set_value(0)
+            self.lines['in3'].set_value(1)
+            self.lines['in4'].set_value(0)
+        elif linear_x < 0:
+            # Backward
+            self.lines['in1'].set_value(0)
+            self.lines['in2'].set_value(1)
+            self.lines['in3'].set_value(0)
+            self.lines['in4'].set_value(1)
+        else:
+            # Stop
+            self.lines['in1'].set_value(0)
+            self.lines['in2'].set_value(0)
+            self.lines['in3'].set_value(0)
+            self.lines['in4'].set_value(0)
+
+        # Set motor speed (0-100%)
+        self.motor_speed = min(abs(linear_x) * 100, 100)
+
+        # Set servo angle (center=90, left=45, right=135)
+        self.servo_angle = 90 + (angular_z * 45)
+        self.servo_angle = max(45, min(135, self.servo_angle))
+
+        self.get_logger().debug(f'Speed: {self.motor_speed:.1f}%, Servo: {self.servo_angle:.1f}°')
+
+    def destroy_node(self):
+        self.pwm_running = False
+        self.motor_pwm_thread.join()
+        self.servo_pwm_thread.join()
+        # Release GPIO
+        for line in self.lines.values():
+            line.set_value(0)
+            line.release()
+        super().destroy_node()
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = MotorController()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+---END FILE---
+
+STEP 5.4: UPDATE PACKAGE SETUP
+------------------------------
+Edit: /ros2_ws/src/wyzecar_motor/setup.py
+
+Add to entry_points console_scripts:
+    'motor_controller = wyzecar_motor.motor_controller:main',
+
+STEP 5.5: CREATE CAMERA PACKAGE
+-------------------------------
+   cd /ros2_ws/src
+   ros2 pkg create --build-type ament_python wyzecar_vision \
+       --dependencies rclpy sensor_msgs cv_bridge vision_msgs geometry_msgs
+
+STEP 5.6: CREATE HUMAN DETECTOR NODE
+------------------------------------
+Edit: /ros2_ws/src/wyzecar_vision/wyzecar_vision/human_detector.py
+
+---BEGIN FILE---
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
+from geometry_msgs.msg import PointStamped
+from cv_bridge import CvBridge
+from ultralytics import YOLO
+import cv2
+import numpy as np
+
+class HumanDetector(Node):
+    def __init__(self):
+        super().__init__('human_detector')
+
+        # Parameters
+        self.declare_parameter('model', 'yolov8n.pt')
+        self.declare_parameter('confidence_threshold', 0.5)
+        self.declare_parameter('image_width', 640)
+        self.declare_parameter('image_height', 480)
+
+        model_path = self.get_parameter('model').value
+        self.conf_threshold = self.get_parameter('confidence_threshold').value
+        self.img_width = self.get_parameter('image_width').value
+        self.img_height = self.get_parameter('image_height').value
+
+        # Load YOLOv8 model
+        self.get_logger().info(f'Loading YOLO model: {model_path}')
+        self.model = YOLO(model_path)
+        self.get_logger().info('YOLO model loaded')
+
+        # CV Bridge
+        self.bridge = CvBridge()
+
+        # Publishers
+        self.detection_pub = self.create_publisher(Detection2DArray, 'detections', 10)
+        self.target_pub = self.create_publisher(PointStamped, 'target_person', 10)
+        self.debug_image_pub = self.create_publisher(Image, 'debug_image', 10)
+
+        # Subscriber
+        self.subscription = self.create_subscription(
+            Image,
+            'image_raw',
+            self.image_callback,
+            10
+        )
+
+        self.get_logger().info('Human detector initialized')
+
+    def image_callback(self, msg):
+        try:
+            # Convert ROS Image to OpenCV
+            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+
+            # Resize for faster inference
+            cv_image_resized = cv2.resize(cv_image, (self.img_width, self.img_height))
+
+            # Run YOLO inference
+            results = self.model(cv_image_resized, verbose=False)
+
+            # Process detections
+            detection_array = Detection2DArray()
+            detection_array.header = msg.header
+
+            best_person = None
+            best_area = 0
+
+            for result in results:
+                boxes = result.boxes
+                for box in boxes:
+                    cls = int(box.cls[0])
+                    conf = float(box.conf[0])
+
+                    # Class 0 is 'person' in COCO dataset
+                    if cls == 0 and conf >= self.conf_threshold:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+
+                        # Create detection message
+                        det = Detection2D()
+                        det.bbox.center.position.x = (x1 + x2) / 2
+                        det.bbox.center.position.y = (y1 + y2) / 2
+                        det.bbox.size_x = float(x2 - x1)
+                        det.bbox.size_y = float(y2 - y1)
+
+                        hyp = ObjectHypothesisWithPose()
+                        hyp.hypothesis.class_id = 'person'
+                        hyp.hypothesis.score = conf
+                        det.results.append(hyp)
+
+                        detection_array.detections.append(det)
+
+                        # Track largest person (likely closest)
+                        area = (x2 - x1) * (y2 - y1)
+                        if area > best_area:
+                            best_area = area
+                            best_person = det
+
+                        # Draw on debug image
+                        cv2.rectangle(cv_image_resized,
+                                    (int(x1), int(y1)),
+                                    (int(x2), int(y2)),
+                                    (0, 255, 0), 2)
+                        cv2.putText(cv_image_resized,
+                                   f'Person {conf:.2f}',
+                                   (int(x1), int(y1)-10),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                   (0, 255, 0), 2)
+
+            # Publish detections
+            self.detection_pub.publish(detection_array)
+
+            # Publish target person (normalized coordinates)
+            if best_person:
+                target = PointStamped()
+                target.header = msg.header
+                # Normalize to -1 to 1 range (center = 0)
+                target.point.x = (best_person.bbox.center.position.x / self.img_width - 0.5) * 2
+                target.point.y = (best_person.bbox.center.position.y / self.img_height - 0.5) * 2
+                # Z represents relative size (proxy for distance)
+                target.point.z = best_area / (self.img_width * self.img_height)
+                self.target_pub.publish(target)
+
+                # Highlight target
+                cx = int(best_person.bbox.center.position.x)
+                cy = int(best_person.bbox.center.position.y)
+                cv2.circle(cv_image_resized, (cx, cy), 10, (0, 0, 255), -1)
+
+            # Publish debug image
+            debug_msg = self.bridge.cv2_to_imgmsg(cv_image_resized, encoding='bgr8')
+            debug_msg.header = msg.header
+            self.debug_image_pub.publish(debug_msg)
+
+        except Exception as e:
+            self.get_logger().error(f'Error processing image: {e}')
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = HumanDetector()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+---END FILE---
+
+STEP 5.7: CREATE FOLLOWER NODE
+------------------------------
+Edit: /ros2_ws/src/wyzecar_vision/wyzecar_vision/follower.py
+
+---BEGIN FILE---
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist, PointStamped
+import time
+
+class Follower(Node):
+    def __init__(self):
+        super().__init__('follower')
+
+        # Parameters
+        self.declare_parameter('linear_speed', 0.5)      # Max forward speed
+        self.declare_parameter('angular_gain', 1.0)      # Steering sensitivity
+        self.declare_parameter('target_size', 0.15)      # Target person size in frame
+        self.declare_parameter('size_tolerance', 0.05)   # Acceptable size variance
+        self.declare_parameter('lost_timeout', 2.0)      # Seconds before stopping
+
+        self.linear_speed = self.get_parameter('linear_speed').value
+        self.angular_gain = self.get_parameter('angular_gain').value
+        self.target_size = self.get_parameter('target_size').value
+        self.size_tolerance = self.get_parameter('size_tolerance').value
+        self.lost_timeout = self.get_parameter('lost_timeout').value
+
+        # State
+        self.last_target_time = None
+        self.target_x = 0.0
+        self.target_size_current = 0.0
+
+        # Publisher
+        self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+
+        # Subscriber
+        self.subscription = self.create_subscription(
+            PointStamped,
+            'target_person',
+            self.target_callback,
+            10
+        )
+
+        # Control loop timer (10Hz)
+        self.timer = self.create_timer(0.1, self.control_loop)
+
+        self.get_logger().info('Follower initialized')
+
+    def target_callback(self, msg):
+        self.last_target_time = time.time()
+        self.target_x = msg.point.x  # -1 (left) to 1 (right)
+        self.target_size_current = msg.point.z  # Relative size
+
+    def control_loop(self):
+        cmd = Twist()
+
+        # Check if we have a recent target
+        if self.last_target_time is None:
+            # No target ever seen
+            self.cmd_pub.publish(cmd)
+            return
+
+        time_since_target = time.time() - self.last_target_time
+
+        if time_since_target > self.lost_timeout:
+            # Target lost - stop
+            self.get_logger().warn('Target lost, stopping')
+            self.cmd_pub.publish(cmd)
+            return
+
+        # Steering: Turn towards target
+        # target_x is -1 (left) to 1 (right)
+        # angular.z is positive for left turn
+        cmd.angular.z = -self.target_x * self.angular_gain
+
+        # Speed: Adjust based on target size (distance proxy)
+        size_error = self.target_size - self.target_size_current
+
+        if abs(size_error) < self.size_tolerance:
+            # At correct distance - stop forward motion
+            cmd.linear.x = 0.0
+        elif size_error > 0:
+            # Target too small (far away) - move forward
+            cmd.linear.x = min(size_error * 2.0, self.linear_speed)
+        else:
+            # Target too big (too close) - move backward
+            cmd.linear.x = max(size_error * 2.0, -self.linear_speed)
+
+        self.cmd_pub.publish(cmd)
+        self.get_logger().debug(f'Cmd: linear={cmd.linear.x:.2f}, angular={cmd.angular.z:.2f}')
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = Follower()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+---END FILE---
+
+STEP 5.8: UPDATE VISION PACKAGE SETUP
+-------------------------------------
+Edit: /ros2_ws/src/wyzecar_vision/setup.py
+
+Add to entry_points console_scripts:
+    'human_detector = wyzecar_vision.human_detector:main',
+    'follower = wyzecar_vision.follower:main',
+
+STEP 5.9: BUILD PACKAGES
+------------------------
+Inside Docker container:
+
+   cd /ros2_ws
+   colcon build
+   source install/setup.bash
+
+================================================================================
+                    PHASE 6: HARDWARE WIRING
+================================================================================
+
+STEP 6.1: GATHER MATERIALS
+--------------------------
+- Jumper wires (female-female, male-female)
+- L298N motor driver module
+- Lab power supply (set to 7-12V)
+- Multimeter (for verification)
+
+STEP 6.2: COMMON GROUND (CRITICAL!)
+-----------------------------------
+Connect ALL grounds together:
+  - Sonata J8 Pin 9 (GND)
+  - L298N GND terminal
+  - Lab power supply negative (-)
+  - Servo GND wire (black/brown)
+
+STEP 6.3: POWER CONNECTIONS
+---------------------------
+1. Lab PSU positive (+) --> L298N +12V terminal
+   Set voltage to 7-12V depending on your motors
+
+2. L298N 5V regulator jumper --> INSTALLED (ON position)
+   This provides 5V for servo from L298N
+
+3. L298N 5V output --> Servo 5V wire (red)
+
+STEP 6.4: MOTOR DIRECTION CONNECTIONS (GPIO)
+--------------------------------------------
+Sonata J8 Pin    -->    L298N Pin
+-----------------------------------------
+J8.2 (GPIO1_IO11)  -->  IN1
+J8.4 (GPIO1_IO12)  -->  IN2
+J8.6 (GPIO1_IO08)  -->  IN3
+J8.8 (GPIO1_IO15)  -->  IN4
+
+STEP 6.5: PWM CONNECTIONS (MOTOR SPEED)
+---------------------------------------
+Sonata Pin            -->    L298N Pin
+-----------------------------------------
+J8.5 (SPDIF_EXT_CLK)  -->    ENA (Motor 1 speed)
+J8.10 (GPIO1_IO06)    -->    ENB (Motor 2 speed)
+
+STEP 6.6: SERVO CONNECTION
+--------------------------
+Sonata Pin            -->    Servo
+-----------------------------------------
+J7.5 (SAI2_RXC)       -->    Signal (orange/yellow wire)
+L298N +5V             -->    5V (red wire)
+Common GND            -->    GND (black/brown wire)
+
+After GPIO discovery (Step 2.2), update motor_controller.py
+with the correct gpiochip and line numbers.
+
+STEP 6.7: MOTOR CONNECTIONS
+---------------------------
+L298N OUT1, OUT2 --> Motor 1 (left side)
+L298N OUT3, OUT4 --> Motor 2 (right side)
+
+================================================================================
+                    PHASE 7: TESTING
+================================================================================
+
+STEP 7.1: TEST MOTOR DIRECTION (NO PWM)
+---------------------------------------
+Before running ROS2, test GPIO directly:
+
+   # Set all direction pins high (should spin motors)
+   gpioset gpiochipX in1_line=1 in2_line=0 in3_line=1 in4_line=0
+
+   # Motors should spin forward
+   # Reverse direction:
+   gpioset gpiochipX in1_line=0 in2_line=1 in3_line=0 in4_line=1
+
+   # Stop:
+   gpioset gpiochipX in1_line=0 in2_line=0 in3_line=0 in4_line=0
+
+STEP 7.2: TEST MOTOR CONTROLLER NODE
+------------------------------------
+In Docker container:
+
+   source /opt/ros/humble/setup.bash
+   source /ros2_ws/install/setup.bash
+
+   # Start motor controller (update gpio params first!)
+   ros2 run wyzecar_motor motor_controller
+
+In another terminal:
+
+   # Send velocity command
+   ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
+       "{linear: {x: 0.5}, angular: {z: 0.0}}" --once
+
+   # Should move forward
+
+   ros2 topic pub /cmd_vel geometry_msgs/msg/Twist \
+       "{linear: {x: 0.0}, angular: {z: 0.5}}" --once
+
+   # Should turn left
+
+STEP 7.3: TEST CAMERA NODE
+--------------------------
+   # Use v4l2_camera package
+   ros2 run v4l2_camera v4l2_camera_node --ros-args \
+       -p video_device:=/dev/video0 \
+       -p image_size:=[640,480]
+
+   # In another terminal, check topic
+   ros2 topic hz /image_raw
+
+STEP 7.4: TEST HUMAN DETECTOR
+-----------------------------
+   # Terminal 1: Camera
+   ros2 run v4l2_camera v4l2_camera_node
+
+   # Terminal 2: Detector
+   ros2 run wyzecar_vision human_detector
+
+   # Terminal 3: Monitor detections
+   ros2 topic echo /target_person
+
+Stand in front of camera - should see detection messages.
+
+STEP 7.5: FULL SYSTEM TEST
+--------------------------
+Create launch file: /ros2_ws/src/wyzecar_vision/launch/wyzecar.launch.py
+
+---BEGIN FILE---
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='v4l2_camera',
+            executable='v4l2_camera_node',
+            name='camera',
+            parameters=[{
+                'video_device': '/dev/video0',
+                'image_size': [640, 480],
+            }]
+        ),
+        Node(
+            package='wyzecar_vision',
+            executable='human_detector',
+            name='human_detector',
+            parameters=[{
+                'confidence_threshold': 0.5,
+            }]
+        ),
+        Node(
+            package='wyzecar_vision',
+            executable='follower',
+            name='follower',
+            parameters=[{
+                'linear_speed': 0.3,
+                'angular_gain': 0.8,
+            }]
+        ),
+        Node(
+            package='wyzecar_motor',
+            executable='motor_controller',
+            name='motor_controller',
+            parameters=[{
+                'gpio_chip': 'gpiochip0',
+                'servo_chip': 'gpiochip0',  # May differ from gpio_chip
+                # UPDATE THESE WITH YOUR ACTUAL LINE NUMBERS
+                'in1_line': 0,   # J8.2
+                'in2_line': 1,   # J8.4
+                'in3_line': 2,   # J8.6
+                'in4_line': 3,   # J8.8
+                'ena_line': 4,   # J8.5
+                'enb_line': 5,   # J8.10
+                'servo_line': 6, # J7.5
+            }]
+        ),
+    ])
+---END FILE---
+
+Run full system:
+   ros2 launch wyzecar_vision wyzecar.launch.py
+
+================================================================================
+                    PHASE 8: TUNING
+================================================================================
+
+STEP 8.1: TUNE MOTOR SPEED
+--------------------------
+Adjust in follower parameters:
+  - linear_speed: Max speed (0.0-1.0)
+  - Start low (0.3) and increase gradually
+
+STEP 8.2: TUNE STEERING
+-----------------------
+  - angular_gain: Steering sensitivity
+  - Higher = more responsive, may oscillate
+  - Lower = smoother, may lose target
+
+STEP 8.3: TUNE FOLLOWING DISTANCE
+---------------------------------
+  - target_size: How big person should appear in frame
+  - Larger value = closer following distance
+  - size_tolerance: Deadband to prevent oscillation
+
+STEP 8.4: TUNE DETECTION
+------------------------
+  - confidence_threshold: Lower = more detections, more false positives
+  - Start at 0.5, adjust based on environment
+
+================================================================================
+                    TROUBLESHOOTING
+================================================================================
+
+PROBLEM: Docker can't access /dev/video0
+SOLUTION: Ensure --privileged flag and -v /dev:/dev in docker run
+
+PROBLEM: GPIO permission denied
+SOLUTION: Run as root or add user to gpio group:
+   sudo usermod -aG gpio $USER
+
+PROBLEM: No PWM chips found
+SOLUTION: Use software PWM (already implemented in motor_controller)
+
+PROBLEM: Camera not detected
+SOLUTION: Check USB-C cable connection, try:
+   lsusb
+   dmesg | grep -i video
+   dmesg | grep -i usb
+
+PROBLEM: YOLO model slow
+SOLUTION: Reduce image resolution:
+   -p image_size:=[320,240]
+
+PROBLEM: Motors spin wrong direction
+SOLUTION: Swap IN1/IN2 or IN3/IN4 connections (or in code)
+
+PROBLEM: Servo jitters
+SOLUTION: Ensure common ground, check 5V supply is stable
+
+================================================================================
+                    REFERENCE: GPIO LINE MAPPING
+================================================================================
+
+Fill in after running gpioinfo on your board:
+
+Header    Signal         gpiochip    Line    Tested    Use
+------    ------         --------    ----    ------    ---
+J8.1      BASE_PER_3V3   -           -       [ ]       3.3V ref (don't use)
+J8.2      GPIO1_IO11     ________    ____    [ ]       IN1 (Motor 1 Dir A)
+J8.3      SPDIF_RX       -           -       [ ]       (CAN-FD, avoid)
+J8.4      GPIO1_IO12     ________    ____    [ ]       IN2 (Motor 1 Dir B)
+J8.5      SPDIF_EXT_CLK  ________    ____    [ ]       ENA (Motor 1 PWM)
+J8.6      GPIO1_IO08     ________    ____    [ ]       IN3 (Motor 2 Dir A)
+J8.7      SPDIF_TX       -           -       [ ]       (CAN-FD, avoid)
+J8.8      GPIO1_IO15     ________    ____    [ ]       IN4 (Motor 2 Dir B)
+J8.9      GND            -           -       [ ]       Common Ground
+J8.10     GPIO1_IO06     ________    ____    [ ]       ENB (Motor 2 PWM)
+J7.5      SAI2_RXC       ________    ____    [ ]       Servo PWM
+
+================================================================================
+                    QUICK REFERENCE COMMANDS
+================================================================================
+
+# Start Docker
+cd ~/wyzecar_ws && ./run_docker.sh
+
+# Build ROS2 packages
+cd /ros2_ws && colcon build && source install/setup.bash
+
+# Test motor manually
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}" --once
+
+# Check camera
+v4l2-ctl --list-devices
+
+# Monitor detections
+ros2 topic echo /target_person
+
+# View all topics
+ros2 topic list
+
+# Check node status
+ros2 node list
+
+================================================================================

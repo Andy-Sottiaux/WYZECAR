@@ -29,9 +29,6 @@ Sonata Carrier Board
   - GPIO header with PWM-capable pins
   - USB ports
 
-Note: Verify your carrier - "Sonata" is the Variscite name.
-      You mentioned "Sonoma" which may be a different variant.
-
 ================================================================================
                           CAMERA OPTIONS
 ================================================================================
@@ -200,18 +197,18 @@ POWER:
   Wall adapter --> Dart MX95 (for now)
   Lab PSU (0-30V, 0-10A) --> L298N +12V
 
-L298N TO DART (via Sonata J8 GPIO header):
-  IN1  <-- J8.2  GPIO1_IO11 (Motor 1 direction)
-  IN2  <-- J8.4  GPIO1_IO12 (Motor 1 direction)
-  IN3  <-- J8.6  GPIO1_IO08 (Motor 2 direction)
-  IN4  <-- J8.8  GPIO1_IO15 (Motor 2 direction)
-  ENA  <-- J8.5  SPDIF_EXT_CLK (Motor 1 speed, software PWM)
-  ENB  <-- J8.10 GPIO1_IO06 (Motor 2 speed, software PWM)
-  GND  <-- J8.9  Common ground
+L298N TO DART (via Sonata GPIO header):
+  ENA  <-- PWM pin (Motor 1 speed)
+  IN1  <-- GPIO (Motor 1 direction)
+  IN2  <-- GPIO (Motor 1 direction)
+  IN3  <-- GPIO (Motor 2 direction)
+  IN4  <-- GPIO (Motor 2 direction)
+  ENB  <-- PWM pin (Motor 2 speed)
+  GND  <-- Common ground
 
-STEERING SERVO (via Sonata J7 header):
-  Signal <-- J7.5 SAI2_RXC (50Hz servo signal, software PWM)
-  5V     <-- L298N 5V output
+STEERING SERVO:
+  Signal <-- PWM pin (50Hz servo signal)
+  5V     <-- L298N 5V output (or separate 5V)
   GND    <-- Common ground
 
 CAMERA:

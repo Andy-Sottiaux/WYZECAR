@@ -1,0 +1,32 @@
+# PlatformIO build artifacts
+.pio/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Compiled files
+*.o
+*.d
+*.elf
+*.bin
+*.map
+*.a
+*.dblite

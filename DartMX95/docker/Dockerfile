@@ -17,9 +17,6 @@ RUN apt-get update && \
         lsb-release \
         build-essential \
         git \
-        python3-colcon-common-extensions \
-        python3-rosdep \
-        python3-vcstool \
         python3-pip \
         sudo && \
     locale-gen en_US en_US.UTF-8 && \
@@ -31,7 +28,10 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o 
     apt-get update && \
     apt-get install -y --no-install-recommends \
         ros-${ROS_DISTRO}-desktop \
-        python3-argcomplete && \
+        python3-argcomplete \
+        python3-colcon-common-extensions \
+        python3-rosdep \
+        python3-vcstool && \
     rm -rf /var/lib/apt/lists/*
 
 # Initialize rosdep database (ignore if already initialized)

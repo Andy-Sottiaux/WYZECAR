@@ -56,6 +56,8 @@ class MotorControllerI2CNode(Node):
         self.declare_parameter('max_linear_speed', 0.5)  # m/s
         self.declare_parameter('max_angular_speed', 1.0)  # rad/s
         self.declare_parameter('command_timeout', 2.0)  # seconds
+        self.declare_parameter('servo_center', 90)  # Center position (1500µs)
+        self.declare_parameter('servo_range', 90)   # Full range: 0-180° maps to 1300-1700µs
         
         # Get parameters
         self.i2c_bus = self.get_parameter('i2c_bus').get_parameter_value().integer_value
@@ -64,6 +66,8 @@ class MotorControllerI2CNode(Node):
         self.max_linear_speed = self.get_parameter('max_linear_speed').get_parameter_value().double_value
         self.max_angular_speed = self.get_parameter('max_angular_speed').get_parameter_value().double_value
         self.command_timeout = self.get_parameter('command_timeout').get_parameter_value().double_value
+        self.servo_center = self.get_parameter('servo_center').get_parameter_value().integer_value
+        self.servo_range = self.get_parameter('servo_range').get_parameter_value().integer_value
         
         # ROS2 Subscribers and Publishers
         self.cmd_vel_sub = self.create_subscription(
@@ -102,6 +106,7 @@ class MotorControllerI2CNode(Node):
         self.start_background_threads()
         
         self.get_logger().info(f'Motor Controller I2C Node started on bus {self.i2c_bus}, address 0x{self.esp32_address:02X}')
+        self.get_logger().info(f'Servo: {self.servo_center}° center, ±{self.servo_range}° range (ESP32 limits to 1300-1700µs)')
 
     def init_i2c_connection(self):
         """Initialize I2C connection to ESP32"""
@@ -222,8 +227,17 @@ class MotorControllerI2CNode(Node):
         # Convert to differential drive motor speeds
         left_speed, right_speed = self.diff_drive_kinematics(linear_x, angular_z)
         
-        # Send motor command to ESP32
-        success = self.send_motor_command(left_speed, right_speed)
+        # Convert angular velocity to servo angle (limited range around center)
+        # angular_z: negative = turn left, positive = turn right
+        # servo: < 90 = left, > 90 = right
+        normalized_angular = angular_z / self.max_angular_speed  # -1 to 1
+        servo_offset = int(normalized_angular * self.servo_range)
+        servo_angle = self.servo_center + servo_offset
+        servo_angle = max(self.servo_center - self.servo_range, 
+                         min(self.servo_center + self.servo_range, servo_angle))
+        
+        # Send motor command to ESP32 with servo angle
+        success = self.send_motor_command(left_speed, right_speed, servo_angle)
         
         if not success:
             self.get_logger().warn('Failed to send I2C motor command')

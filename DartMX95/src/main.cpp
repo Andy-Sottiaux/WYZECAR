@@ -37,8 +37,11 @@
 #define IN4 13
 #define ENB 14
 
-// Servo Pin
+// Servo Pin and PWM Configuration
 #define SERVO_PIN 33
+#define SERVO_MIN_US 1300   // Minimum pulse width (full left)
+#define SERVO_MAX_US 1700   // Maximum pulse width (full right)
+#define SERVO_CENTER_US 1500 // Center pulse width
 
 // LED Pin
 #define LED_PIN 2
@@ -118,9 +121,10 @@ void setup() {
   pinMode(IN4, OUTPUT);
   pinMode(ENB, OUTPUT);
   
-  // Initialize servo
-  steeringServo.attach(SERVO_PIN);
-  steeringServo.write(servoAngle);
+  // Initialize servo with custom PWM range (1300-1700µs)
+  // 0° = 1300µs (left), 90° = 1500µs (center), 180° = 1700µs (right)
+  steeringServo.attach(SERVO_PIN, SERVO_MIN_US, SERVO_MAX_US);
+  steeringServo.write(servoAngle);  // Start at center (90°)
   
   stopMotors();
   

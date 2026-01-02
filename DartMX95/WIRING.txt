@@ -1,348 +1,358 @@
 ================================================================================
-                    WYZECAR - DART MX95 + SONATA CARRIER
-                              WIRING GUIDE
+      WIRING: ESP32 WROOM + L298N + DART-MX95 + STEERING SERVO
+                      VISION-BASED HUMAN FOLLOWING CAR
 ================================================================================
 
-CONFIGURATION:
-  Camera: CUM10330_MOD (3.4MP via USB-C)
-  Detection: YOLOv8-nano
-  Motor Control: Direct GPIO/PWM from Dart MX95
+SYSTEM OVERVIEW
+---------------
+- DART-MX95: Vision processing, YOLO detection, ROS2 control system
+- ESP32 WROOM: Real-time motor controller (receives commands via UART)
+- L298N: Dual H-Bridge motor driver for DC motors
+- CAM2C CUM10330_MOD: USB-C camera for human detection and tracking
+- Steering Servo: Controlled by ESP32 for navigation
+
+Signal Flow:
+  Camera --> DART-MX95 --[Vision Processing]--> ROS2 Node
+  ROS2 --> ESP32 --[Real-time Control]--> L298N --> Motors + Servo
+
+Architecture Philosophy:
+- DART-MX95: High-level intelligence (vision, planning, decision making)
+- ESP32: Low-level execution (precise motor timing, safety systems)
 
 ================================================================================
                           POWER DISTRIBUTION
 ================================================================================
 
-                         WALL ADAPTER (Dart MX95)
+                         MAIN BATTERY (7-12V)
                                    |
-                                   v
-                         Sonata 12V DC Jack (J30)
-                                   |
-                         Sonata Power Regulators
-                                   |
-                              DART MX95
+                +------------------+------------------+
+                |                                     |
+                v                                     v
+           L298N +12V                            12V to DART-MX95
+                |                                (via J30 DC jack)
+    +-----------+-----------+                         |
+    |           |           |                         v
+    v           v           v                   DART-MX95 Internal
+ Motors     L298N 5V    L298N GND               Power Management
+            Regulator        |                         |
+                |            |           +-------------+-------------+
+                |            |           |             |             |
+                v            |           v             v             v
+        Servo 5V (HS-85MG)   |      USB-C Camera   J6 Header    ESP32 Power
+                |            |      Power (J33)      5V           via J6
+                +------+-----+                       |             |
+                       |                             +-------------+
+                  COMMON GND
 
-
-                         LAB PSU (0-30V, 0-10A)
-                                   |
-                                   v
-                            L298N +12V (set to 7-12V)
-                                   |
-                    +--------------+--------------+
-                    |              |              |
-                    v              v              v
-                 Motors      L298N 5V         L298N GND
-                            Regulator              |
-                                |                  |
-                                v                  |
-                           Servo 5V                |
-                                |                  |
-                                +--------+---------+
-                                         |
-                                    COMMON GND
-                                         |
-                              Sonata GND (J6/J7/J8)
-
-================================================================================
-                     DART-MX95 GPIO PINS (from Sonata Datasheet)
-================================================================================
-
-Source: Sonata-Board Datasheet Rev 1.2, 07/2025
-
-IMPORTANT SWITCH SETTINGS FOR DART-MX95:
-----------------------------------------
-  SW1  (Power Select) --> ON  (connects SOM power to J3.15, 27, 34 & 63)
-  SW10 (NXP Workaround) --> ON  (required for DART-MX95 bring up)
-  SW8  (Boot Select) --> OFF for eMMC, ON for SD Card
-
-GPIO HEADER J8 (10-pin, 2.54mm pitch) - DIRECTLY ACCESSIBLE:
-------------------------------------------------------------
-Pin    Signal          Type    Use For
----    ------          ----    -------
-1      BASE_PER_3V3    P       3.3V reference
-2      GPIO1_IO11      IO      IN1 (Motor 1 Dir A)
-3      SPDIF_RX        IO      (connected to CAN-FD, avoid)
-4      GPIO1_IO12      IO      IN2 (Motor 1 Dir B)
-5      SPDIF_EXT_CLK   IO      ENA (Motor 1 PWM)
-6      GPIO1_IO08      IO      IN3 (Motor 2 Dir A)
-7      SPDIF_TX        IO      (connected to CAN-FD, avoid)
-8      GPIO1_IO15      IO      IN4 (Motor 2 Dir B)
-9      GND             P       Common Ground
-10     GPIO1_IO06      IO      ENB (Motor 2 PWM)
-
-SAI2/SAI5 HEADER J7 (20-pin, 2.54mm pitch) - DIRECTLY ACCESSIBLE:
------------------------------------------------------------------
-Pin    Signal          Type    Use For
----    ------          ----    -------
-1      CAN_H           IO      (CAN Bus - don't use)
-2      CAN_L           IO      (CAN Bus - don't use)
-3      BASE_PER_1V8    P       1.8V reference (don't use for L298N)
-4      GND             P       Common Ground
-5      SAI2_RXC        IO      Servo PWM
-7      SAI2_RXFS       IO      (spare)
-9      SAI2_RXD0       IO      (spare)
-11     SAI2_TXC        IO      (spare)
-13     SAI2_TXFS       IO      (spare)
-15     SAI2_TXD0       IO      (spare)
-17     SAI2_MCLK       IO      (spare)
-
-NOTE: J8 GPIO pins are 3.3V level - compatible with L298N inputs.
+Power Requirements:
+- Main Battery: 7-12V, 5A capacity recommended
+- L298N 5V regulator: Powers Servo only (~800mA peak for HS-85MG)
+- DART-MX95: Self-powered via 12V DC input + powers ESP32 via J6 header
+- ESP32: Powered from DART-MX95 J6 header 5V (~150mA)
+- Camera: USB-C powered directly from DART-MX95
+- Hitec HS-85MG Servo: High-performance metal gear servo, 5V, 800mA stall
 
 ================================================================================
-                          ACTIVE HEADER PINOUT
+                              WIRING DIAGRAM
 ================================================================================
 
-We'll use J8 header (10-pin GPIO/SPDIF) on Sonata for motor control.
-All GPIO pins are 3.3V level - compatible with L298N inputs directly.
+                     DART-MX95 (Sonata Carrier)
+        +----------------------------------------+
+        |                                        |
+        |  J30 (12V DC) <-- Wall Adapter         |
+        |  J33 (USB-C) <--- CAM2C Camera         |
+        |                                        |
+        |  J32 (USB Debug) - for development     |
+        |                                        |
+        |  J6 (UART/I2C Header)                  |
+        |  +---+---+---+---+---+---+---+---+    |
+        |  |5V |GND| TX| RX|   |   |   |   |    |
+        |  +---+---+---+---+---+---+---+---+    |
+        |    |   |   |   |                      |
+        |    |   |   |   +-------> ESP32 GPIO16 (RX)
+        |    |   |   +-----------> ESP32 GPIO17 (TX)
+        |    |   +-----------> ESP32 GND        |
+        |    +--------------> ESP32 VIN (5V)    |
+        |                                        |
+        +----------------------------------------+
 
-RECOMMENDED PINOUT (Using J8 + J7 Headers):
--------------------------------------------
-J8 Pin    Signal          L298N           Function
-------    ------          -----           --------
-1         BASE_PER_3V3    -               3.3V reference (do not use for power)
-2         GPIO1_IO11      IN1             Motor 1 Direction A
-3         SPDIF_RX        -               (avoid - connected to CAN-FD)
-4         GPIO1_IO12      IN2             Motor 1 Direction B
-5         SPDIF_EXT_CLK   ENA             Motor 1 Speed (software PWM)
-6         GPIO1_IO08      IN3             Motor 2 Direction A
-7         SPDIF_TX        -               (avoid - connected to CAN-FD)
-8         GPIO1_IO15      IN4             Motor 2 Direction B
-9         GND             GND             Common Ground
-10        GPIO1_IO06      ENB             Motor 2 Speed (software PWM)
 
-J7 Pin    Signal          Servo           Function
-------    ------          -----           --------
-4         GND             -               (use J8.9 for common ground)
-5         SAI2_RXC        Signal          Servo PWM (50Hz, software PWM)
+                       ESP32 WROOM
+                   +------------------+
+                   |      USB         |
+                   |                  |
+              3V3  | o            o | VIN <-------- DART-MX95 J6 Pin 1 (5V)
+              GND  | o            o | GND --------> DART-MX95 J6 Pin 2 (GND)
+              D15  | o            o | D13 (GPIO13) -> IN4
+              D2   | o            o | D12 (GPIO12) -> IN3
+              D4   | o            o | D14 (GPIO14) -> ENB
+         RX2  D16  | o            o | D27 (GPIO27) -> IN2
+         TX2  D17  | o            o | D26 (GPIO26) -> IN1
+              D5   | o            o | D25 (GPIO25) -> ENA
+              D18  | o            o | D33 ---------> Servo Signal
+              D19  | o            o | D32
+              D21  | o            o | D35
+              D22  | o            o | D34
+              D23  | o            o | VN
+                   |      EN  BOOT  |
+                   +------------------+
 
-NOTE: Both ENA (J8.5) and ENB (J8.10) use software PWM for motor speed control.
-      Servo uses J7.5 (SAI2_RXC) for independent PWM control.
+UART Communication:
+- ESP32 GPIO16 (RX2) <-- DART-MX95 UART TX
+- ESP32 GPIO17 (TX2) --> DART-MX95 UART RX
+- Common GND connection
 
-================================================================================
-                     GPIO ACCESS METHOD
-================================================================================
 
-Using software PWM via libgpiod for motor speed and servo control.
-This is simpler than hardware PWM routing and sufficient for this application.
-
-Software PWM Implementation:
----------------------------
-- Motor PWM: ~1kHz frequency, 0-100% duty cycle for speed
-- Servo PWM: 50Hz frequency, 1-2ms pulse width for position
-- Use Python gpiod library or direct sysfs GPIO control
-- Timing via high-resolution timers (usleep/nanosleep)
-
-================================================================================
-                          WIRING DIAGRAM
-================================================================================
-
-                        SONATA BOARD (J8 + J7 Headers)
-                   +------------------------------------+
-                   |  J8 (10-pin GPIO/SPDIF)            |
-                   |  Pin 2  (GPIO1_IO11) ---|--> IN1   |
-                   |  Pin 4  (GPIO1_IO12) ---|--> IN2   |
-                   |  Pin 5  (SPDIF_EXT)  ---|--> ENA   |
-                   |  Pin 6  (GPIO1_IO08) ---|--> IN3   |
-                   |  Pin 8  (GPIO1_IO15) ---|--> IN4   |
-                   |  Pin 9  (GND) ----------+--> GND   |
-                   |  Pin 10 (GPIO1_IO06) ---|--> ENB   |
-                   |                                    |
-                   |  J7 (20-pin SAI2/SAI5)             |
-                   |  Pin 5  (SAI2_RXC) -----|--> Servo |
-                   +------------------------------------+
-                              |
-                              v
-                        L298N MODULE
+                      L298N MODULE
         +------------------------------------+
         |                                    |
         |  +12V  GND  +5V                    |
         |   o     o    o                     |
-        |   ^     |    +-- To Servo 5V       |
-        |   |     +------- To Sonata GND     |
-        |   +------------- Lab PSU +         |
+        |   ^     ^    +-- To Servo 5V (HS-85MG)  |
+        |   |     +------- Common Ground     |
+        |   +------------- Main Battery +    |
         |                                    |
-        |  [5V REG JUMPER] <-- ON            |
+        |  [5V REG JUMPER] <-- Must be ON    |
         |                                    |
         |  ENA  IN1  IN2  IN3  IN4  ENB      |
         |   o    o    o    o    o    o       |
-        |   ^    ^    ^    ^    ^    ^       |
-        |   |    |    |    |    |    |       |
-        |  J8.5 J8.2 J8.4 J8.6 J8.8 J8.10   |
         +------------------------------------+
+            |    |    |    |    |    |
+            |    |    |    |    |    +-------> GPIO14
+            |    |    |    |    +-----------> GPIO13
+            |    |    |    +----------------> GPIO12
+            |    |    +---------------------> GPIO27
+            |    +--------------------------> GPIO26
+            +-------------------------------> GPIO25
 
 
-                    STEERING SERVO
+                HITEC HS-85MG SERVO
                    +--------------+
                    |              |
-                   |   Signal o---+---> Sonata J7.5 (SAI2_RXC)
+                   |   Signal o---+---> ESP32 GPIO33
                    |      5V  o---+---> L298N 5V Output
                    |     GND  o---+---> Common GND
                    |              |
+                   | Metal Gear   |
+                   | Digital Servo|
                    +--------------+
 
 
-                    CUM10330_MOD CAMERA
-                   +------------------+
-                   |                  |
-                   |   USB-C port o---+--> USB-C cable --> Sonata USB-C port
-                   |   (on ISP board) |
-                   |                  |
-                   +------------------+
+                   CAM2C CUM10330_MOD
+                   +--------------+
+                   |    Camera    |
+                   |   Module     |
+                   +--------------+
+                           |
+                      USB-C Cable
+                           |
+                           v
+                   DART-MX95 J33 (USB-C OTG)
 
 ================================================================================
                           CONNECTION TABLE
 ================================================================================
 
-MOTOR CONTROL (Sonata J8 to L298N):
------------------------------------
-Sonata Pin    Signal         L298N Pin     Function
-----------    ------         ---------     --------
-J8.9          GND            GND           Common Ground
-J8.2          GPIO1_IO11     IN1           Motor 1 Direction A
-J8.4          GPIO1_IO12     IN2           Motor 1 Direction B
-J8.5          SPDIF_EXT_CLK  ENA           Motor 1 Speed (software PWM)
-J8.6          GPIO1_IO08     IN3           Motor 2 Direction A
-J8.8          GPIO1_IO15     IN4           Motor 2 Direction B
-J8.10         GPIO1_IO06     ENB           Motor 2 Speed (software PWM)
-
-STEERING SERVO:
+ESP32 TO L298N:
 ---------------
-Sonata Pin    Signal         Servo Pin     Function
-----------    ------         ---------     --------
-J7.5          SAI2_RXC       Signal        Servo PWM (50Hz, software PWM)
-L298N         +5V            5V            Servo Power
-L298N         GND            GND           Ground
+ESP32 Pin     L298N Pin     Function
+---------     ---------     --------
+GPIO25        ENA           Motor A PWM (Left)
+GPIO26        IN1           Motor A Direction A
+GPIO27        IN2           Motor A Direction B
+GPIO12        IN3           Motor B Direction A
+GPIO13        IN4           Motor B Direction B
+GPIO14        ENB           Motor B PWM (Right)
 
-CAMERA:
+ESP32 TO HITEC HS-85MG SERVO:
+-----------------------------
+ESP32 Pin     Servo Pin     Function
+---------     ---------     --------
+GPIO33        Signal        Servo PWM Control (50Hz, 1-2ms pulse width)
+
+DART-MX95 TO ESP32 (UART + Power):
+----------------------------------
+DART Pin      ESP32 Pin     Function
+--------      ---------     --------
+J6 Pin 1 (5V) VIN           ESP32 Power Supply
+J6 Pin 2 (GND) GND          Common Ground
+J6 Pin 3 (TX) GPIO16 (RX2)  Command transmission
+J6 Pin 4 (RX) GPIO17 (TX2)  Status feedback
+
+CAMERA CONNECTION:
+------------------
+Camera        DART-MX95     Function
+------        ---------     --------
+USB-C         J33 (USB-C)   Video data + Power
+
+POWER CONNECTIONS:
+------------------
+Source        Destination   Function
+------        -----------   --------
+Main Battery  L298N +12V    Motor power
+Main Battery  DART DC Jack  System power
+DART-MX95 J6  ESP32 VIN     ESP32 power (5V, 150mA)
+L298N 5V      Servo VCC     HS-85MG power (5V, 800mA peak)
+
+MOTORS:
 -------
-Sonata Connector    Camera              Function
-----------------    ------              --------
-USB-C port          CUM10330_MOD        USB video (via ISP board)
+Motor A (Left):  L298N OUT1/OUT2
+Motor B (Right): L298N OUT3/OUT4
+
+================================================================================
+                     GROUND CONNECTIONS (CRITICAL!)
+================================================================================
+
+All grounds MUST be connected together in a star configuration:
+
+  +-- Main Battery GND
+  |
+  +-- L298N GND terminal
+  |
+  +-- ESP32 GND (via DART-MX95 J6 Pin 2)
+  |
+  +-- DART-MX95 GND (via J6 header and power jack)
+  |
+  +-- Hitec HS-85MG Servo GND
+
+Use thick gauge wire (16 AWG minimum) for ground connections.
+Keep ground wires as short as possible to minimize noise.
+
+================================================================================
+                    COMMUNICATION PROTOCOL (UART)
+================================================================================
+
+DART-MX95 to ESP32 Commands (115200 baud, 8N1):
+------------------------------------------------
+MOTOR <motor> <direction> <speed>
+  motor: A or B
+  direction: FORWARD, BACKWARD, STOP
+  speed: 0-100 (percentage)
+  Example: "MOTOR A FORWARD 75\n"
+
+SERVO <angle>
+  angle: 0-180 degrees
+  Example: "SERVO 90\n"
+
+STOP
+  Emergency stop all motors
+  Example: "STOP\n"
+
+STATUS
+  Request ESP32 status
+  Example: "STATUS\n"
+
+ESP32 to DART-MX95 Responses:
+-----------------------------
+OK
+  Command executed successfully
+
+ERROR <message>
+  Command failed with reason
+
+STATUS motor_a:<speed> motor_b:<speed> servo:<angle>
+  Current system status
+  Example: "STATUS motor_a:75 motor_b:50 servo:90\n"
+
+WATCHDOG
+  Periodic heartbeat (sent every 500ms)
+
+================================================================================
+                          WIRING CHECKLIST
+================================================================================
 
 POWER:
-------
-Source              Destination         Notes
-------              -----------         -----
-Wall adapter        Sonata J30          12V DC for Dart MX95
-Lab PSU             L298N +12V          Set to 7-12V for motors
-L298N 5V output     Servo 5V            Regulated 5V
-All GNDs            Connected together  Common ground required
+[ ] Main battery to L298N +12V terminal
+[ ] Main battery to DART-MX95 12V DC jack (J30)
+[ ] L298N 5V jumper installed (ON position)
+[ ] DART-MX95 J6 Pin 1 (5V) to ESP32 VIN
+[ ] DART-MX95 J6 Pin 2 (GND) to ESP32 GND
+[ ] L298N 5V to Hitec HS-85MG Servo VCC
+
+MOTOR CONTROL (ESP32 to L298N):
+[ ] GPIO25 to ENA (Motor A PWM)
+[ ] GPIO26 to IN1 (Motor A Dir A)
+[ ] GPIO27 to IN2 (Motor A Dir B)
+[ ] GPIO12 to IN3 (Motor B Dir A)
+[ ] GPIO13 to IN4 (Motor B Dir B)
+[ ] GPIO14 to ENB (Motor B PWM)
+
+SERVO CONTROL:
+[ ] ESP32 GPIO33 to Hitec HS-85MG signal wire
+
+COMMUNICATION (UART):
+[ ] DART-MX95 J6 Pin 3 (TX) to ESP32 GPIO16 (RX2)
+[ ] DART-MX95 J6 Pin 4 (RX) to ESP32 GPIO17 (TX2)
+
+CAMERA:
+[ ] CAM2C CUM10330_MOD USB-C to DART-MX95 J33
+
+MOTORS:
+[ ] Motor A (Left) to L298N OUT1/OUT2
+[ ] Motor B (Right) to L298N OUT3/OUT4
+
+GROUND (CRITICAL):
+[ ] All device grounds connected in star configuration
+[ ] Thick gauge ground wires used
+[ ] Ground connections verified with multimeter
+
+SAFETY:
+[ ] Emergency stop button accessible
+[ ] Battery disconnect switch installed
+[ ] Fuses installed on main power lines
 
 ================================================================================
-                     LINUX GPIO/PWM INTERFACE
+                          TROUBLESHOOTING
 ================================================================================
 
-After booting Debian, check available GPIO:
+ESP32 not responding:
+  - Check power: 5V at ESP32 VIN pin from DART-MX95 J6
+  - Verify DART-MX95 is powered and booted
+  - Check UART wiring (TX/RX may be swapped on J6 header)
+  - Test with ESP32 USB connection for debugging
 
-  # List GPIO chips
-  ls /sys/class/gpio/
+Motors don't move:
+  - Verify common ground connections
+  - Check battery voltage (should be 7-12V)
+  - Test L298N independently with multimeter
+  - Send STATUS command to check ESP32 response
 
-  # List PWM controllers
-  ls /sys/class/pwm/
+Camera not detected:
+  - Check USB-C connection to J33
+  - Verify camera power LED (if present)
+  - Test with: ls /dev/video*
+  - Try different USB-C cable
 
-  # Check device tree for pin assignments
-  cat /proc/device-tree/...
+Communication errors:
+  - Verify UART baud rate (115200)
+  - Check TX/RX connections (may be reversed)
+  - Test with minicom or similar terminal program
+  - Ensure common ground between devices
 
-GPIO Control (using libgpiod):
-------------------------------
-  # Install libgpiod
-  apt install gpiod libgpiod-dev
+Hitec HS-85MG servo jittering:
+  - Check 5V power stability at servo (L298N regulator)
+  - Verify PWM signal with oscilloscope (50Hz, 1-2ms pulse)
+  - HS-85MG requires stable 5V and can draw 800mA peak
+  - Add large capacitor (1000µF) across servo power if needed
+  - Ensure L298N 5V regulator can handle servo current
 
-  # List GPIO lines
-  gpioinfo
-
-  # Set output high
-  gpioset gpiochip0 <line>=1
-
-  # Set output low
-  gpioset gpiochip0 <line>=0
-
-Software PWM (if hardware PWM not available):
----------------------------------------------
-  # Use Python RPi.GPIO-style library or
-  # Write custom PWM using high-res timers
-  # ~1kHz for motors, 50Hz for servo
-
-Hardware PWM (if exposed):
---------------------------
-  echo 0 > /sys/class/pwm/pwmchip0/export
-  echo 20000000 > /sys/class/pwm/pwmchip0/pwm0/period      # 50Hz
-  echo 1500000 > /sys/class/pwm/pwmchip0/pwm0/duty_cycle   # 1.5ms
-  echo 1 > /sys/class/pwm/pwmchip0/pwm0/enable
-
-================================================================================
-                          FIRST STEPS
-================================================================================
-
-1. VERIFY HEADER ACCESS
-   - Power up Sonata with Dart MX95
-   - Ensure SW1=ON, SW10=ON (required for DART-MX95)
-   - Boot Debian
-   - Run: gpioinfo
-   - Identify which GPIO chips/lines map to J8 pins
-
-2. TEST GPIO OUTPUT
-   - Connect LED + 330ohm resistor to J8.2 (GPIO1_IO11)
-   - Toggle with: gpioset gpiochipX <line>=1
-   - Verify 3.3V output with multimeter
-
-3. WIRE L298N (one motor first)
-   - Connect J8.9 (GND) to L298N GND
-   - Connect J8.2 (GPIO1_IO11) to IN1
-   - Connect J8.4 (GPIO1_IO12) to IN2
-   - Connect J8.5 (SPDIF_EXT_CLK) to ENA
-   - Power L298N from lab PSU (start at 7V)
-   - Test direction control with gpioset
-
-4. ADD SERVO
-   - Connect J8.10 (GPIO1_IO06) to servo signal
-   - Test with software PWM at 50Hz
-   - Verify servo responds to 1-2ms pulses
-
-5. CONNECT CAMERA
-   - Connect USB-C cable from CUM10330_MOD to Sonata USB-C port
-   - Boot, check /dev/video*
-   - Test with v4l2-ctl or lsusb
+DART-MX95 not booting:
+  - Check 12V power at DC jack
+  - Verify switch settings (SW1=ON, SW10=ON)
+  - Check for short circuits
+  - Try booting without peripherals connected
 
 ================================================================================
-                          NOTES
+                        NEXT STEPS: SOFTWARE SETUP
 ================================================================================
 
-VOLTAGE LEVELS:
-- Sonata GPIO: 3.3V logic
-- L298N inputs: 3.3V compatible (TTL levels)
-- Servo signal: 3.3V compatible (most servos work with 3.3V signal)
+1. Flash ESP32 with motor control firmware
+2. Set up ROS2 environment on DART-MX95
+3. Install camera drivers and YOLO detection
+4. Configure UART communication between systems
+5. Implement human following algorithm
+6. Add safety systems and emergency stops
 
-CURRENT:
-- Sonata GPIO: ~4-8mA max per pin
-- L298N inputs: ~1mA (high impedance)
-- OK to drive directly
-
-GROUND:
-- All grounds MUST be connected together
-- Sonata GND + L298N GND + Lab PSU GND
-
-ISOLATION:
-- For safety, keep motor power (lab PSU) separate from logic power
-- Add flyback diodes if not built into L298N
-- Consider optoisolators for production design
-
-================================================================================
-                          TODO: PIN VERIFICATION
-================================================================================
-
-[ ] Boot Dart MX95 with Debian
-[ ] Run gpioinfo to list available GPIO chips and lines
-[ ] Find the gpiochip and line numbers for:
-    - GPIO1_IO11 (J8.2)  --> IN1
-    - GPIO1_IO12 (J8.4)  --> IN2
-    - GPIO1_IO08 (J8.6)  --> IN3
-    - GPIO1_IO15 (J8.8)  --> IN4
-    - SPDIF_EXT_CLK (J8.5) --> ENA
-    - GPIO1_IO06 (J8.10) --> ENB
-    - SAI2_RXC (J7.5) --> Servo
-[ ] Test each pin with LED + resistor before connecting L298N
-[ ] Verify 3.3V output with multimeter
-[ ] Check /sys/class/pwm/ for any hardware PWM available
-[ ] Update motor_controller.py with actual gpiochip/line numbers
+Refer to companion software documentation for implementation details.
 
 ================================================================================

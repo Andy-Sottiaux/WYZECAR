@@ -1,29 +1,30 @@
 /*
- * WyzeCar Motor Control - ESP32 WROOM + L298N + Cube Orange Plus
+ * WyzeCar Motor Control - ESP32 WROOM + L298N + Servo + Cube Orange Plus
  *
- * This firmware reads PWM throttle signals from Cube Orange Plus and
- * controls the L298N motor driver accordingly. It also accepts serial
- * commands for manual testing.
+ * This firmware reads PWM throttle/steering signals from Cube Orange Plus and
+ * controls the L298N motor driver and steering servo accordingly. It also 
+ * accepts serial commands for manual testing.
  *
  * Operation Modes:
- *   1. AUTO: Cube Orange Plus PWM input controls motors (ArduRover)
- *   2. MANUAL: Serial commands control motors (for testing)
+ *   1. AUTO: Cube Orange Plus PWM input controls motors/servo (ArduRover)
+ *   2. MANUAL: Serial commands control motors/servo (for testing)
  *
  * Serial Protocol:
  *   M1:<speed>    - Set Motor 1 speed (-255 to 255)
  *   M2:<speed>    - Set Motor 2 speed (-255 to 255)
+ *   SERVO:<angle> - Set servo angle (0 to 180)
  *   STOP          - Stop both motors
- *   STATUS        - Get current motor status
+ *   STATUS        - Get current motor/servo status
  *   MODE:AUTO     - Switch to autopilot mode
  *   MODE:MANUAL   - Switch to manual mode
  *
  * PWM Input (from Cube):
- *   1000us = Full Reverse
- *   1500us = Stop (neutral)
- *   2000us = Full Forward
+ *   Throttle: 1000us = Full Reverse, 1500us = Stop, 2000us = Full Forward
+ *   Steering: 1000us = Full Left, 1500us = Center, 2000us = Full Right
  */
 
 #include <Arduino.h>
+#include <ESP32Servo.h>
 
 // ============================================================================
 // PIN DEFINITIONS - ESP32 WROOM
@@ -40,14 +41,18 @@
 #define IN3_PIN  12   // Motor 2 Direction
 #define IN4_PIN  13   // Motor 2 Direction
 
-// Cube Orange Plus PWM Input
-#define THROTTLE_PWM_PIN  34  // GPIO34 (input only, ADC1_CH6)
+// Steering Servo Pin (Hitec HS-85MG)
+#define SERVO_PIN  33  // GPIO33 for servo PWM
+
+// Cube Orange Plus PWM Inputs
+#define THROTTLE_PWM_PIN  34  // GPIO34 (input only) - Throttle channel
+#define STEERING_PWM_PIN  35  // GPIO35 (input only) - Steering channel
 
 // Status LED (built-in on most ESP32 boards)
 #define LED_PIN  2
 
 // ============================================================================
-// LEDC PWM CONFIGURATION
+// LEDC PWM CONFIGURATION (for motors)
 // ============================================================================
 
 #define PWM_FREQ       5000   // 5 kHz PWM frequency
@@ -56,12 +61,25 @@
 #define PWM_CHANNEL_B  1      // LEDC channel for Motor 2
 
 // ============================================================================
+// SERVO CONFIGURATION
+// ============================================================================
+
+#define SERVO_MIN_ANGLE  0    // Minimum servo angle (full left)
+#define SERVO_MAX_ANGLE  180  // Maximum servo angle (full right)
+#define SERVO_CENTER     90   // Center position
+
+// Servo PWM pulse widths (microseconds)
+#define SERVO_PWM_MIN    1300  // Minimum pulse width (full left)
+#define SERVO_PWM_CENTER 1500  // Center pulse width (neutral)
+#define SERVO_PWM_MAX    1700  // Maximum pulse width (full right)
+
+// ============================================================================
 // PWM INPUT CONFIGURATION
 // ============================================================================
 
-#define PWM_MIN_US     1000   // Minimum pulse width (full reverse)
-#define PWM_MID_US     1500   // Neutral (stop)
-#define PWM_MAX_US     2000   // Maximum pulse width (full forward)
+#define PWM_MIN_US     1000   // Minimum pulse width (full reverse/left)
+#define PWM_MID_US     1500   // Neutral (stop/center)
+#define PWM_MAX_US     2000   // Maximum pulse width (full forward/right)
 #define PWM_DEADBAND   50     // Deadband around neutral (+/- microseconds)
 #define PWM_TIMEOUT_MS 500    // Signal lost timeout
 
@@ -73,11 +91,21 @@
 volatile int motor1Speed = 0;
 volatile int motor2Speed = 0;
 
-// PWM input measurement (using interrupts)
-volatile unsigned long pwmRiseTime = 0;
-volatile unsigned long pwmPulseWidth = 0;
-volatile unsigned long lastPwmUpdate = 0;
-volatile bool newPwmData = false;
+// Servo state
+Servo steeringServo;
+volatile int servoAngle = SERVO_CENTER;
+
+// Throttle PWM input measurement (using interrupts)
+volatile unsigned long throttlePwmRiseTime = 0;
+volatile unsigned long throttlePwmPulseWidth = 0;
+volatile unsigned long lastThrottlePwmUpdate = 0;
+volatile bool newThrottlePwmData = false;
+
+// Steering PWM input measurement (using interrupts)
+volatile unsigned long steeringPwmRiseTime = 0;
+volatile unsigned long steeringPwmPulseWidth = 0;
+volatile unsigned long lastSteeringPwmUpdate = 0;
+volatile bool newSteeringPwmData = false;
 
 // Operating mode
 enum OperatingMode { MODE_MANUAL, MODE_AUTO };
@@ -88,16 +116,22 @@ volatile OperatingMode currentMode = MODE_AUTO;
 // ============================================================================
 
 void setupMotorPins();
+void setupServoPins();
 void setupPwmInput();
 void setMotor1(int speed);
 void setMotor2(int speed);
 void setBothMotors(int speed);
+void setServo(int angle);
 void stopMotors();
+void stopAll();
 void processCommand(String cmd);
 void sendStatus();
 void processThrottlePwm();
+void processSteeringPwm();
 int pwmToSpeed(unsigned long pulseWidth);
-void IRAM_ATTR pwmISR();
+int pwmToServoAngle(unsigned long pulseWidth);
+void IRAM_ATTR throttlePwmISR();
+void IRAM_ATTR steeringPwmISR();
 
 // ============================================================================
 // SETUP
@@ -114,26 +148,30 @@ void setup() {
 
     // Setup motor control
     setupMotorPins();
+    
+    // Setup servo control
+    setupServoPins();
 
     // Setup PWM input from Cube
     setupPwmInput();
 
-    // Start with motors stopped
-    stopMotors();
+    // Start with motors stopped and servo centered
+    stopAll();
 
     Serial.println();
     Serial.println("========================================");
-    Serial.println("  WyzeCar ESP32 Motor Controller");
-    Serial.println("  Cube Orange Plus + L298N Interface");
+    Serial.println("  WyzeCar ESP32 Motor Controller v2.0");
+    Serial.println("  Cube Orange Plus + L298N + Servo");
     Serial.println("========================================");
     Serial.println();
     Serial.println("Commands:");
-    Serial.println("  M1:<speed>   - Motor 1 (-255 to 255)");
-    Serial.println("  M2:<speed>   - Motor 2 (-255 to 255)");
-    Serial.println("  STOP         - Stop all motors");
-    Serial.println("  STATUS       - Show current status");
-    Serial.println("  MODE:AUTO    - Autopilot mode (Cube PWM)");
-    Serial.println("  MODE:MANUAL  - Manual serial control");
+    Serial.println("  M1:<speed>    - Motor 1 (-255 to 255)");
+    Serial.println("  M2:<speed>    - Motor 2 (-255 to 255)");
+    Serial.println("  SERVO:<angle> - Servo (0 to 180)");
+    Serial.println("  STOP          - Stop all motors");
+    Serial.println("  STATUS        - Show current status");
+    Serial.println("  MODE:AUTO     - Autopilot mode (Cube PWM)");
+    Serial.println("  MODE:MANUAL   - Manual serial control");
     Serial.println();
     Serial.println("Current mode: AUTO (Cube PWM control)");
     Serial.println("========================================");
@@ -156,6 +194,7 @@ void loop() {
     // Process Cube PWM input in AUTO mode
     if (currentMode == MODE_AUTO) {
         processThrottlePwm();
+        processSteeringPwm();
     }
 
     // Blink LED to show activity
@@ -186,7 +225,27 @@ void setupMotorPins() {
     ledcSetup(PWM_CHANNEL_B, PWM_FREQ, PWM_RESOLUTION);
     ledcAttachPin(ENB_PIN, PWM_CHANNEL_B);
 
-    Serial.println("Motor pins configured");
+    Serial.println("Motor pins configured (ENA=25, IN1=26, IN2=27, IN3=12, IN4=13, ENB=14)");
+}
+
+// ============================================================================
+// SERVO CONTROL SETUP
+// ============================================================================
+
+void setupServoPins() {
+    // Allow allocation of all timers for servo
+    ESP32PWM::allocateTimer(2);
+    ESP32PWM::allocateTimer(3);
+    
+    // Attach servo to pin with standard 50Hz frequency
+    steeringServo.setPeriodHertz(50);  // Standard 50Hz servo
+    steeringServo.attach(SERVO_PIN, SERVO_PWM_MIN, SERVO_PWM_MAX);  // 1300-1700us range
+    
+    // Center the servo
+    steeringServo.write(SERVO_CENTER);
+    servoAngle = SERVO_CENTER;
+    
+    Serial.println("Servo configured on GPIO33 (50Hz, 1300-1700us, center=1500us)");
 }
 
 // ============================================================================
@@ -194,24 +253,47 @@ void setupMotorPins() {
 // ============================================================================
 
 void setupPwmInput() {
+    // Throttle input
     pinMode(THROTTLE_PWM_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(THROTTLE_PWM_PIN), pwmISR, CHANGE);
-    Serial.println("PWM input configured on GPIO34");
+    attachInterrupt(digitalPinToInterrupt(THROTTLE_PWM_PIN), throttlePwmISR, CHANGE);
+    
+    // Steering input
+    pinMode(STEERING_PWM_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(STEERING_PWM_PIN), steeringPwmISR, CHANGE);
+    
+    Serial.println("PWM input configured: Throttle=GPIO34, Steering=GPIO35");
 }
 
-// PWM Input Interrupt Service Routine
-void IRAM_ATTR pwmISR() {
+// Throttle PWM Input Interrupt Service Routine
+void IRAM_ATTR throttlePwmISR() {
     unsigned long now = micros();
 
     if (digitalRead(THROTTLE_PWM_PIN) == HIGH) {
         // Rising edge - record start time
-        pwmRiseTime = now;
+        throttlePwmRiseTime = now;
     } else {
         // Falling edge - calculate pulse width
-        if (pwmRiseTime > 0) {
-            pwmPulseWidth = now - pwmRiseTime;
-            lastPwmUpdate = millis();
-            newPwmData = true;
+        if (throttlePwmRiseTime > 0) {
+            throttlePwmPulseWidth = now - throttlePwmRiseTime;
+            lastThrottlePwmUpdate = millis();
+            newThrottlePwmData = true;
+        }
+    }
+}
+
+// Steering PWM Input Interrupt Service Routine
+void IRAM_ATTR steeringPwmISR() {
+    unsigned long now = micros();
+
+    if (digitalRead(STEERING_PWM_PIN) == HIGH) {
+        // Rising edge - record start time
+        steeringPwmRiseTime = now;
+    } else {
+        // Falling edge - calculate pulse width
+        if (steeringPwmRiseTime > 0) {
+            steeringPwmPulseWidth = now - steeringPwmRiseTime;
+            lastSteeringPwmUpdate = millis();
+            newSteeringPwmData = true;
         }
     }
 }
@@ -222,28 +304,57 @@ void IRAM_ATTR pwmISR() {
 
 void processThrottlePwm() {
     // Check for signal timeout
-    if (millis() - lastPwmUpdate > PWM_TIMEOUT_MS) {
+    if (millis() - lastThrottlePwmUpdate > PWM_TIMEOUT_MS) {
         // No signal - stop motors for safety
         if (motor1Speed != 0 || motor2Speed != 0) {
             stopMotors();
-            Serial.println("PWM signal lost - motors stopped");
+            Serial.println("Throttle PWM signal lost - motors stopped");
         }
         return;
     }
 
     // Process new PWM data
-    if (newPwmData) {
-        newPwmData = false;
+    if (newThrottlePwmData) {
+        newThrottlePwmData = false;
 
         // Get pulse width (disable interrupts briefly for atomic read)
         noInterrupts();
-        unsigned long pulse = pwmPulseWidth;
+        unsigned long pulse = throttlePwmPulseWidth;
         interrupts();
 
         // Validate pulse width
         if (pulse >= 900 && pulse <= 2100) {
             int speed = pwmToSpeed(pulse);
             setBothMotors(speed);
+        }
+    }
+}
+
+// ============================================================================
+// STEERING PWM PROCESSING
+// ============================================================================
+
+void processSteeringPwm() {
+    // Check for signal timeout - keep last position if signal lost
+    if (millis() - lastSteeringPwmUpdate > PWM_TIMEOUT_MS) {
+        // No signal - center servo for safety (optional, could keep last position)
+        // setServo(SERVO_CENTER);
+        return;
+    }
+
+    // Process new PWM data
+    if (newSteeringPwmData) {
+        newSteeringPwmData = false;
+
+        // Get pulse width (disable interrupts briefly for atomic read)
+        noInterrupts();
+        unsigned long pulse = steeringPwmPulseWidth;
+        interrupts();
+
+        // Validate pulse width
+        if (pulse >= 900 && pulse <= 2100) {
+            int angle = pwmToServoAngle(pulse);
+            setServo(angle);
         }
     }
 }
@@ -266,6 +377,13 @@ int pwmToSpeed(unsigned long pulseWidth) {
     }
 
     return constrain(speed, -255, 255);
+}
+
+// Convert PWM pulse width to servo angle (0 to 180)
+int pwmToServoAngle(unsigned long pulseWidth) {
+    // Map 1000-2000us to 0-180 degrees
+    int angle = map(pulseWidth, PWM_MIN_US, PWM_MAX_US, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+    return constrain(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
 }
 
 // ============================================================================
@@ -323,9 +441,27 @@ void setBothMotors(int speed) {
     setMotor2(speed);
 }
 
+// ============================================================================
+// SERVO CONTROL FUNCTION
+// ============================================================================
+
+void setServo(int angle) {
+    servoAngle = constrain(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+    steeringServo.write(servoAngle);
+}
+
+// ============================================================================
+// STOP FUNCTIONS
+// ============================================================================
+
 void stopMotors() {
     setMotor1(0);
     setMotor2(0);
+}
+
+void stopAll() {
+    stopMotors();
+    setServo(SERVO_CENTER);
 }
 
 // ============================================================================
@@ -357,16 +493,31 @@ void processCommand(String cmd) {
         Serial.print("OK M2:");
         Serial.println(speed);
     }
+    else if (cmd.startsWith("SERVO:")) {
+        if (currentMode != MODE_MANUAL) {
+            Serial.println("WARN: Switch to MANUAL mode first (MODE:MANUAL)");
+            return;
+        }
+        int angle = cmd.substring(6).toInt();
+        angle = constrain(angle, 0, 180);
+        setServo(angle);
+        Serial.print("OK SERVO:");
+        Serial.println(angle);
+    }
     else if (cmd == "STOP") {
         stopMotors();
         Serial.println("OK STOPPED");
+    }
+    else if (cmd == "CENTER") {
+        setServo(SERVO_CENTER);
+        Serial.println("OK SERVO CENTERED");
     }
     else if (cmd == "STATUS") {
         sendStatus();
     }
     else if (cmd == "MODE:AUTO") {
         currentMode = MODE_AUTO;
-        stopMotors();
+        stopAll();
         Serial.println("OK Mode: AUTO (Cube PWM control)");
     }
     else if (cmd == "MODE:MANUAL") {
@@ -388,18 +539,28 @@ void sendStatus() {
     Serial.println(motor1Speed);
     Serial.print("Motor 2: ");
     Serial.println(motor2Speed);
+    Serial.print("Servo: ");
+    Serial.print(servoAngle);
+    Serial.println(" deg");
 
     noInterrupts();
-    unsigned long pulse = pwmPulseWidth;
-    unsigned long lastUpdate = lastPwmUpdate;
+    unsigned long throttlePulse = throttlePwmPulseWidth;
+    unsigned long throttleLastUpdate = lastThrottlePwmUpdate;
+    unsigned long steeringPulse = steeringPwmPulseWidth;
+    unsigned long steeringLastUpdate = lastSteeringPwmUpdate;
     interrupts();
 
-    Serial.print("PWM Pulse: ");
-    Serial.print(pulse);
-    Serial.println(" us");
+    Serial.print("Throttle PWM: ");
+    Serial.print(throttlePulse);
+    Serial.print(" us (");
+    Serial.print((millis() - throttleLastUpdate) < PWM_TIMEOUT_MS ? "OK" : "LOST");
+    Serial.println(")");
 
-    bool signalValid = (millis() - lastUpdate) < PWM_TIMEOUT_MS;
-    Serial.print("PWM Signal: ");
-    Serial.println(signalValid ? "OK" : "LOST");
+    Serial.print("Steering PWM: ");
+    Serial.print(steeringPulse);
+    Serial.print(" us (");
+    Serial.print((millis() - steeringLastUpdate) < PWM_TIMEOUT_MS ? "OK" : "LOST");
+    Serial.println(")");
+
     Serial.println("--------------");
 }

@@ -1,289 +1,310 @@
 /*
-  ESP32 Motor Control Firmware for WYZECAR Vision-Based Human Following System
+  ESP32 I2C Motor Controller for DART-MX95
+  Using ESP-IDF I2C Slave API directly (most reliable method)
   
-  This firmware runs on ESP32 WROOM and controls:
-  - L298N dual motor driver for differential drive motors
-  - Servo motor for steering
-  - UART communication with DART-MX95 for high-level commands
+  I2C Wiring (J6 Header on DART-MX95):
+    Pin 18 (I2C3_SCL) -> ESP32 GPIO22 (SCL)
+    Pin 20 (I2C3_SDA) -> ESP32 GPIO21 (SDA)
+    Pin 12 (GND)      -> ESP32 GND
+    
+  NOTE: I2C3 has 10k pull-ups on the DART-MX95 SOM
+    
+  ESP32 I2C Address: 0x42
   
-  Hardware Connections:
-  - Motor A PWM: GPIO25 (ENA)
-  - Motor A Dir: GPIO26 (IN1), GPIO27 (IN2) 
-  - Motor B PWM: GPIO14 (ENB)
-  - Motor B Dir: GPIO12 (IN3), GPIO13 (IN4)
-  - Servo PWM: GPIO33
-  - UART: GPIO16 (RX), GPIO17 (TX)
-  
-  Communication Protocol:
-  - Baud: 115200
-  - Commands: "MOTOR A FORWARD 75\n", "SERVO 90\n", "STOP\n", "STATUS\n"
-  - Responses: "OK\n", "ERROR <msg>\n", "STATUS motor_a:75 motor_b:50 servo:90\n"
+  Commands (from DART-MX95):
+    0x01 [left] [right] [servo]  - Set motor speeds and servo
+    0x02                          - Emergency stop
+    0x03                          - Request status
 */
 
-#include <WiFi.h>
+#include <Arduino.h>
 #include <ESP32Servo.h>
-#include <HardwareSerial.h>
+#include "driver/i2c.h"
 
-// Motor Control Pins
-#define MOTOR_A_PWM    25   // ENA - Motor A speed control
-#define MOTOR_A_IN1    26   // IN1 - Motor A direction
-#define MOTOR_A_IN2    27   // IN2 - Motor A direction
-#define MOTOR_B_PWM    14   // ENB - Motor B speed control  
-#define MOTOR_B_IN3    12   // IN3 - Motor B direction
-#define MOTOR_B_IN4    13   // IN4 - Motor B direction
+// I2C Configuration
+#define I2C_SDA_PIN GPIO_NUM_21
+#define I2C_SCL_PIN GPIO_NUM_22
+#define I2C_SLAVE_ADDR 0x42
+#define I2C_PORT I2C_NUM_0
+#define I2C_RX_BUF_LEN 128
+#define I2C_TX_BUF_LEN 128
 
-// Servo Control Pin
-#define SERVO_PIN      33   // Servo signal
+// L298N Motor Driver Pins
+#define ENA 25
+#define IN1 26
+#define IN2 27
+#define IN3 12
+#define IN4 13
+#define ENB 14
 
-// UART Communication
-#define UART_RX        16   // RX from DART-MX95
-#define UART_TX        17   // TX to DART-MX95
-#define UART_BAUD      115200
+// Servo Pin
+#define SERVO_PIN 33
 
-// PWM Configuration
-#define PWM_FREQ       1000  // 1kHz PWM frequency
-#define PWM_RESOLUTION 8     // 8-bit resolution (0-255)
-#define PWM_CHANNEL_A  0     // PWM channel for Motor A
-#define PWM_CHANNEL_B  1     // PWM channel for Motor B
+// LED Pin
+#define LED_PIN 2
 
-// Safety Configuration
-#define WATCHDOG_TIMEOUT  1000  // 1 second timeout
-#define MAX_SPEED         100   // Maximum speed percentage
-#define MIN_SERVO_ANGLE   0     // Minimum servo angle
-#define MAX_SERVO_ANGLE   180   // Maximum servo angle
+// Command codes
+#define CMD_SET_MOTORS     0x01
+#define CMD_EMERGENCY_STOP 0x02
+#define CMD_REQUEST_STATUS 0x03
 
-// Global Variables
-Servo steeringServo;
-HardwareSerial dartSerial(1);  // Use UART1 for communication
+// Motor control variables
+volatile int8_t leftSpeed = 0;
+volatile int8_t rightSpeed = 0;
+volatile uint8_t servoAngle = 90;
+volatile bool emergencyStop = false;
+volatile bool newCommandReceived = false;
+volatile unsigned long lastI2CActivity = 0;
 
-struct MotorState {
-  int speed;        // 0-100 percentage
-  String direction; // "FORWARD", "BACKWARD", "STOP"
-};
-
-MotorState motorA = {0, "STOP"};
-MotorState motorB = {0, "STOP"};
-int servoAngle = 90;  // Center position
-
+// Watchdog
 unsigned long lastCommandTime = 0;
-bool systemEnabled = true;
+const unsigned long WATCHDOG_TIMEOUT_MS = 2000;
+
+Servo steeringServo;
 
 // Function declarations
-void processCommand(String command);
-void handleMotorCommand(String command);
-void handleServoCommand(String command);
-void handleStopCommand();
-void handleStatusCommand();
-void setMotorA(String direction, int speed);
-void setMotorB(String direction, int speed);
-void stopAllMotors();
+void setMotorSpeed(int8_t left, int8_t right);
+void stopMotors();
+bool initI2CSlave();
+void processI2CData();
+
+bool initI2CSlave() {
+  i2c_config_t conf;
+  conf.mode = I2C_MODE_SLAVE;
+  conf.sda_io_num = I2C_SDA_PIN;
+  conf.scl_io_num = I2C_SCL_PIN;
+  conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+  conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+  conf.slave.addr_10bit_en = 0;
+  conf.slave.slave_addr = I2C_SLAVE_ADDR;
+  conf.slave.maximum_speed = 100000;
+  conf.clk_flags = 0;
+  
+  esp_err_t err = i2c_param_config(I2C_PORT, &conf);
+  if (err != ESP_OK) {
+    Serial.printf("I2C param config failed: %d\n", err);
+    return false;
+  }
+  
+  err = i2c_driver_install(I2C_PORT, I2C_MODE_SLAVE, I2C_RX_BUF_LEN, I2C_TX_BUF_LEN, 0);
+  if (err != ESP_OK) {
+    Serial.printf("I2C driver install failed: %d\n", err);
+    return false;
+  }
+  
+  return true;
+}
 
 void setup() {
-  // Initialize Serial for debugging
   Serial.begin(115200);
-  Serial.println("ESP32 Motor Controller Starting...");
+  delay(1000);
   
-  // Initialize UART communication with DART-MX95
-  dartSerial.begin(UART_BAUD, SERIAL_8N1, UART_RX, UART_TX);
+  Serial.println("\n\n");
+  Serial.println("╔════════════════════════════════════════════╗");
+  Serial.println("║  ESP32 I2C Motor Controller v3.0           ║");
+  Serial.println("║  Using ESP-IDF I2C Slave API               ║");
+  Serial.println("║  WYZECAR Vision-Based Following System     ║");
+  Serial.println("╚════════════════════════════════════════════╝");
   
-  // Configure Motor A pins
-  pinMode(MOTOR_A_IN1, OUTPUT);
-  pinMode(MOTOR_A_IN2, OUTPUT);
-  ledcSetup(PWM_CHANNEL_A, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttachPin(MOTOR_A_PWM, PWM_CHANNEL_A);
+  // Initialize LED
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);
   
-  // Configure Motor B pins
-  pinMode(MOTOR_B_IN3, OUTPUT);
-  pinMode(MOTOR_B_IN4, OUTPUT);
-  ledcSetup(PWM_CHANNEL_B, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttachPin(MOTOR_B_PWM, PWM_CHANNEL_B);
+  // Initialize motor pins
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(ENB, OUTPUT);
   
-  // Configure Servo - Hitec HS-85MG requires 50Hz PWM, 1-2ms pulse width
-  steeringServo.attach(SERVO_PIN, 1000, 2000);  // min 1ms, max 2ms pulse width
+  // Initialize servo
+  steeringServo.attach(SERVO_PIN);
   steeringServo.write(servoAngle);
   
-  // Initialize motors to stopped state
-  stopAllMotors();
+  stopMotors();
   
-  Serial.println("ESP32 Motor Controller Ready");
-  dartSerial.println("ESP32 MOTOR CONTROLLER READY");
+  Serial.println("\n[1/3] Motor & Servo configured");
+  
+  // Initialize I2C Slave using ESP-IDF API
+  Serial.println("\n[2/3] Initializing I2C Slave (ESP-IDF API)...");
+  
+  if (initI2CSlave()) {
+    Serial.println("      ✓ I2C Slave initialized!");
+    Serial.printf("      Address: 0x%02X\n", I2C_SLAVE_ADDR);
+    Serial.printf("      SDA: GPIO%d, SCL: GPIO%d\n", I2C_SDA_PIN, I2C_SCL_PIN);
+  } else {
+    Serial.println("      ✗ I2C Slave FAILED!");
+  }
+  
+  Serial.println("\n[3/3] System Ready!");
+  Serial.println("══════════════════════════════════════════════");
+  Serial.println("Test on DART-MX95:");
+  Serial.println("  i2cdetect -y 3");
+  Serial.println("  i2cset -y 3 0x42 0x01 50 50 90 i");
+  Serial.println("══════════════════════════════════════════════\n");
   
   lastCommandTime = millis();
+  
+  // Flash LED
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+    delay(100);
+  }
 }
 
 void loop() {
-  // Check for incoming commands
-  if (dartSerial.available()) {
-    String command = dartSerial.readStringUntil('\n');
-    command.trim();
-    processCommand(command);
-    lastCommandTime = millis();
+  static unsigned long lastStatusPrint = 0;
+  static unsigned long lastBlink = 0;
+  static bool ledState = false;
+  
+  // Check for I2C data
+  processI2CData();
+  
+  // Status print every 5 seconds
+  if (millis() - lastStatusPrint > 5000) {
+    Serial.printf("[%lus] I2C 0x%02X | L=%d R=%d S=%d | Last: %lums ago\n", 
+                  millis()/1000, I2C_SLAVE_ADDR,
+                  leftSpeed, rightSpeed, servoAngle,
+                  lastI2CActivity > 0 ? millis() - lastI2CActivity : 0);
+    lastStatusPrint = millis();
   }
   
-  // Safety watchdog - stop motors if no command received
-  if (millis() - lastCommandTime > WATCHDOG_TIMEOUT) {
-    if (systemEnabled) {
-      Serial.println("Watchdog timeout - stopping motors");
-      stopAllMotors();
-      systemEnabled = false;
-      dartSerial.println("ERROR WATCHDOG_TIMEOUT");
+  // LED patterns
+  if (emergencyStop) {
+    if (millis() - lastBlink > 100) {
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+      lastBlink = millis();
+    }
+  } else if (lastI2CActivity > 0 && millis() - lastI2CActivity < 1000) {
+    digitalWrite(LED_PIN, HIGH);
+  } else {
+    if (millis() - lastBlink > 1000) {
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+      lastBlink = millis();
     }
   }
   
-  // Send periodic heartbeat
-  static unsigned long lastHeartbeat = 0;
-  if (millis() - lastHeartbeat > 500) {
-    dartSerial.println("WATCHDOG");
-    lastHeartbeat = millis();
+  // Apply motor commands
+  if (newCommandReceived) {
+    newCommandReceived = false;
+    lastCommandTime = millis();
+    
+    if (!emergencyStop) {
+      setMotorSpeed(leftSpeed, rightSpeed);
+      steeringServo.write(servoAngle);
+    }
   }
   
-  delay(10);  // Small delay to prevent tight loop
+  // Watchdog
+  if (millis() - lastCommandTime > WATCHDOG_TIMEOUT_MS) {
+    if (!emergencyStop && (leftSpeed != 0 || rightSpeed != 0)) {
+      Serial.println("⚠️  Watchdog timeout");
+      emergencyStop = true;
+      leftSpeed = 0;
+      rightSpeed = 0;
+      stopMotors();
+    }
+  }
+  
+  if (emergencyStop) {
+    stopMotors();
+  }
+  
+  delay(1);
 }
 
-void processCommand(String command) {
-  Serial.println("Received: " + command);
+void processI2CData() {
+  uint8_t buffer[16];
   
-  // Reset system if it was disabled by watchdog
-  if (!systemEnabled) {
-    systemEnabled = true;
-  }
+  // Try to read data from I2C slave buffer (non-blocking with 0 timeout)
+  int len = i2c_slave_read_buffer(I2C_PORT, buffer, sizeof(buffer), 0);
   
-  if (command.startsWith("MOTOR")) {
-    handleMotorCommand(command);
-  }
-  else if (command.startsWith("SERVO")) {
-    handleServoCommand(command);
-  }
-  else if (command == "STOP") {
-    handleStopCommand();
-  }
-  else if (command == "STATUS") {
-    handleStatusCommand();
-  }
-  else {
-    dartSerial.println("ERROR UNKNOWN_COMMAND");
-    Serial.println("Unknown command: " + command);
+  if (len > 0) {
+    lastI2CActivity = millis();
+    
+    uint8_t command = buffer[0];
+    Serial.printf("📥 I2C: cmd=0x%02X len=%d\n", command, len);
+    
+    switch (command) {
+      case CMD_SET_MOTORS:
+        if (len >= 4) {
+          leftSpeed = constrain((int8_t)buffer[1], -100, 100);
+          rightSpeed = constrain((int8_t)buffer[2], -100, 100);
+          servoAngle = constrain(buffer[3], 0, 180);
+          emergencyStop = false;
+          newCommandReceived = true;
+          Serial.printf("    Motors: L=%d R=%d S=%d\n", leftSpeed, rightSpeed, servoAngle);
+        }
+        break;
+        
+      case CMD_EMERGENCY_STOP:
+        emergencyStop = true;
+        leftSpeed = 0;
+        rightSpeed = 0;
+        stopMotors();
+        Serial.println("🛑 Emergency Stop!");
+        break;
+        
+      case CMD_REQUEST_STATUS: {
+        uint8_t response[3];
+        response[0] = (uint8_t)leftSpeed;
+        response[1] = (uint8_t)rightSpeed;
+        uint8_t flags = 0;
+        if (leftSpeed != 0) flags |= 0x01;
+        if (rightSpeed != 0) flags |= 0x02;
+        if (emergencyStop) flags |= 0x04;
+        response[2] = flags;
+        
+        i2c_slave_write_buffer(I2C_PORT, response, 3, 100 / portTICK_PERIOD_MS);
+        Serial.printf("📤 Status: L=%d R=%d F=0x%02X\n", leftSpeed, rightSpeed, flags);
+        break;
+      }
+        
+      default:
+        Serial.printf("    Unknown: 0x%02X\n", command);
+        break;
+    }
   }
 }
 
-void handleMotorCommand(String command) {
-  // Parse: "MOTOR A FORWARD 75" or "MOTOR B BACKWARD 50"
-  int firstSpace = command.indexOf(' ', 6);  // After "MOTOR "
-  int secondSpace = command.indexOf(' ', firstSpace + 1);
-  
-  if (firstSpace == -1 || secondSpace == -1) {
-    dartSerial.println("ERROR INVALID_MOTOR_COMMAND");
-    return;
-  }
-  
-  String motor = command.substring(6, firstSpace);
-  String direction = command.substring(firstSpace + 1, secondSpace);
-  int speed = command.substring(secondSpace + 1).toInt();
-  
-  // Validate inputs
-  if (motor != "A" && motor != "B") {
-    dartSerial.println("ERROR INVALID_MOTOR");
-    return;
-  }
-  
-  if (direction != "FORWARD" && direction != "BACKWARD" && direction != "STOP") {
-    dartSerial.println("ERROR INVALID_DIRECTION");
-    return;
-  }
-  
-  if (speed < 0 || speed > MAX_SPEED) {
-    dartSerial.println("ERROR INVALID_SPEED");
-    return;
-  }
-  
-  // Execute motor command
-  if (motor == "A") {
-    setMotorA(direction, speed);
-    motorA.direction = direction;
-    motorA.speed = speed;
+void setMotorSpeed(int8_t left, int8_t right) {
+  // Left motor
+  if (left > 0) {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+  } else if (left < 0) {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
   } else {
-    setMotorB(direction, speed);
-    motorB.direction = direction;
-    motorB.speed = speed;
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
   }
+  analogWrite(ENA, abs(left) * 255 / 100);
   
-  dartSerial.println("OK");
-  Serial.println("Motor " + motor + " set to " + direction + " at " + String(speed) + "%");
+  // Right motor
+  if (right > 0) {
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+  } else if (right < 0) {
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+  } else {
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, LOW);
+  }
+  analogWrite(ENB, abs(right) * 255 / 100);
 }
 
-void handleServoCommand(String command) {
-  // Parse: "SERVO 90"
-  int angle = command.substring(6).toInt();
-  
-  if (angle < MIN_SERVO_ANGLE || angle > MAX_SERVO_ANGLE) {
-    dartSerial.println("ERROR INVALID_SERVO_ANGLE");
-    return;
-  }
-  
-  steeringServo.write(angle);
-  servoAngle = angle;
-  
-  dartSerial.println("OK");
-  Serial.println("Servo set to " + String(angle) + " degrees");
-}
-
-void handleStopCommand() {
-  stopAllMotors();
-  dartSerial.println("OK");
-  Serial.println("Emergency stop executed");
-}
-
-void handleStatusCommand() {
-  String status = "STATUS motor_a:" + String(motorA.speed) + 
-                  " motor_b:" + String(motorB.speed) + 
-                  " servo:" + String(servoAngle);
-  dartSerial.println(status);
-  Serial.println("Status sent: " + status);
-}
-
-void setMotorA(String direction, int speed) {
-  int pwmValue = map(speed, 0, 100, 0, 255);
-  
-  if (direction == "FORWARD") {
-    digitalWrite(MOTOR_A_IN1, HIGH);
-    digitalWrite(MOTOR_A_IN2, LOW);
-    ledcWrite(PWM_CHANNEL_A, pwmValue);
-  }
-  else if (direction == "BACKWARD") {
-    digitalWrite(MOTOR_A_IN1, LOW);
-    digitalWrite(MOTOR_A_IN2, HIGH);
-    ledcWrite(PWM_CHANNEL_A, pwmValue);
-  }
-  else { // STOP
-    digitalWrite(MOTOR_A_IN1, LOW);
-    digitalWrite(MOTOR_A_IN2, LOW);
-    ledcWrite(PWM_CHANNEL_A, 0);
-  }
-}
-
-void setMotorB(String direction, int speed) {
-  int pwmValue = map(speed, 0, 100, 0, 255);
-  
-  if (direction == "FORWARD") {
-    digitalWrite(MOTOR_B_IN3, HIGH);
-    digitalWrite(MOTOR_B_IN4, LOW);
-    ledcWrite(PWM_CHANNEL_B, pwmValue);
-  }
-  else if (direction == "BACKWARD") {
-    digitalWrite(MOTOR_B_IN3, LOW);
-    digitalWrite(MOTOR_B_IN4, HIGH);
-    ledcWrite(PWM_CHANNEL_B, pwmValue);
-  }
-  else { // STOP
-    digitalWrite(MOTOR_B_IN3, LOW);
-    digitalWrite(MOTOR_B_IN4, LOW);
-    ledcWrite(PWM_CHANNEL_B, 0);
-  }
-}
-
-void stopAllMotors() {
-  setMotorA("STOP", 0);
-  setMotorB("STOP", 0);
-  motorA = {0, "STOP"};
-  motorB = {0, "STOP"};
+void stopMotors() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
 }

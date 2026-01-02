@@ -1,0 +1,65 @@
+GPIO Overview - DART-MX95 Sonata Board
+=====================================
+
+GPIO State Check:
+-----------------
+The current state of the system's GPIOs can be obtained with:
+# cat /sys/kernel/debug/gpio
+
+GPIO Manipulation using libgpiod:
+---------------------------------
+The Linux GPIO sysfs interface is deprecated. Use libgpiod tools instead:
+
+Command Line Tools:
+- gpiodetect: List all gpiochips
+- gpioinfo: List all lines of gpiochips  
+- gpioget: Read GPIO values
+- gpioset: Set GPIO values
+- gpiofind: Find gpiochip and offset by line name
+- gpiomon: Monitor GPIO events
+
+Examples:
+# gpiodetect
+# gpioinfo -c gpiochip0
+# gpioset -t 0 -c gpiochip3 21=1  # Set GPIO4_21 high
+# gpioget -c gpiochip3 21         # Read GPIO4_21
+
+GPIO Banks:
+----------
+i.MX GPIOs are organized in banks of 32 pins. Each bank corresponds to:
+/dev/gpiochip<bank index>
+
+Programming:
+-----------
+libgpiod provides bindings for:
+- C/C++ applications
+- Python applications  
+- Rust applications
+
+Installation for Python:
+# pip3 install gpiod
+
+Device Tree Configuration:
+-------------------------
+To use a pin as GPIO, add relevant definitions to device tree.
+Consult: i.MX Device Tree Pinmux Settings Guide
+
+GPIO Attributes:
+---------------
+Pin control definitions support additional attributes:
+- Pull-up/pull-down
+- Slew rate  
+- Open drain
+- Drive strength
+Values written to IOMUXC_SW_PAD_CTRL_ register.
+
+Sonata Board GPIO State Example:
+--------------------------------
+gpiochip0: GPIOs 512-543 (43810000.gpio)
+gpiochip1: GPIOs 544-575 (43820000.gpio)  
+gpiochip2: GPIOs 576-607 (43840000.gpio)
+gpiochip3: GPIOs 608-639 (43850000.gpio)
+gpiochip4: GPIOs 640-671 (47400000.gpio)
+gpiochip5: GPIOs 672-679 (i2c/2-0022)
+gpiochip6: GPIOs 680-687 (i2c/7-0020)
+gpiochip7: GPIOs 688-695 (i2c/7-0021)

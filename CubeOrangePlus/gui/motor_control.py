@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-WyzeCar Motor Control GUI
-Simple interface to control L298N motors via ESP32 WROOM
+WyzeCar Motor & Servo Control GUI
+Interface to control L298N motors and steering servo via ESP32 WROOM
 
 For manual testing and debugging. The ESP32 must be in MANUAL mode
-(send MODE:MANUAL command) to accept serial motor commands.
-In AUTO mode, the ESP32 receives throttle commands from Cube Orange Plus.
+(send MODE:MANUAL command) to accept serial motor/servo commands.
+In AUTO mode, the ESP32 receives throttle/steering commands from Cube Orange Plus.
 """
 
 import tkinter as tk
@@ -19,19 +19,28 @@ import time
 class MotorControlGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("WyzeCar Motor Control")
-        self.root.geometry("500x520")
+        self.root.title("WyzeCar Motor & Servo Control")
+        self.root.geometry("520x700")
         self.root.resizable(False, False)
+        
+        # Configure styles
+        self.setup_styles()
 
         self.serial_conn = None
         self.connected = False
         self.motor1_speed = tk.IntVar(value=0)
         self.motor2_speed = tk.IntVar(value=0)
+        self.servo_angle = tk.IntVar(value=90)
         self.current_mode = tk.StringVar(value="Unknown")
 
         self.create_widgets()
         self.refresh_ports()
 
+    def setup_styles(self):
+        style = ttk.Style()
+        style.configure("Danger.TButton", foreground="red")
+        style.configure("Servo.TFrame", background="#e8f4e8")
+        
     def create_widgets(self):
         # Connection Frame
         conn_frame = ttk.LabelFrame(self.root, text="Connection", padding=10)
@@ -122,22 +131,51 @@ class MotorControlGUI:
         self.m2_value_label = ttk.Label(m2_frame, text="Speed: 0")
         self.m2_value_label.pack()
 
+        # Steering Servo Frame
+        servo_frame = ttk.LabelFrame(self.root, text="Steering Servo (GPIO33)", padding=10)
+        servo_frame.pack(fill="x", padx=10, pady=5)
+
+        # Servo slider
+        self.servo_slider = ttk.Scale(
+            servo_frame,
+            from_=0,
+            to=180,
+            orient="horizontal",
+            variable=self.servo_angle,
+            command=lambda _: self.on_servo_change(),
+        )
+        self.servo_slider.pack(fill="x", padx=10)
+
+        # Servo buttons
+        servo_btn_frame = ttk.Frame(servo_frame)
+        servo_btn_frame.pack(fill="x", pady=5)
+
+        ttk.Button(servo_btn_frame, text="Full Left (0°)", command=lambda: self.set_servo(0)).pack(side="left", padx=5)
+        ttk.Button(servo_btn_frame, text="Left (45°)", command=lambda: self.set_servo(45)).pack(side="left", padx=5)
+        ttk.Button(servo_btn_frame, text="Center (90°)", command=lambda: self.set_servo(90)).pack(side="left", padx=5)
+        ttk.Button(servo_btn_frame, text="Right (135°)", command=lambda: self.set_servo(135)).pack(side="left", padx=5)
+        ttk.Button(servo_btn_frame, text="Full Right (180°)", command=lambda: self.set_servo(180)).pack(side="left", padx=5)
+
+        self.servo_value_label = ttk.Label(servo_frame, text="Angle: 90°")
+        self.servo_value_label.pack()
+
         # Both Motors Frame
-        both_frame = ttk.LabelFrame(self.root, text="Both Motors", padding=10)
+        both_frame = ttk.LabelFrame(self.root, text="Quick Controls", padding=10)
         both_frame.pack(fill="x", padx=10, pady=5)
 
         btn_frame = ttk.Frame(both_frame)
         btn_frame.pack()
 
-        ttk.Button(btn_frame, text="STOP ALL", command=self.stop_all, style="Danger.TButton").pack(side="left", padx=10, pady=5)
-        ttk.Button(btn_frame, text="Forward", command=lambda: self.both_motors(150)).pack(side="left", padx=10, pady=5)
-        ttk.Button(btn_frame, text="Reverse", command=lambda: self.both_motors(-150)).pack(side="left", padx=10, pady=5)
+        ttk.Button(btn_frame, text="⛔ STOP ALL", command=self.stop_all, style="Danger.TButton").pack(side="left", padx=10, pady=5)
+        ttk.Button(btn_frame, text="⬆️ Forward", command=lambda: self.both_motors(150)).pack(side="left", padx=10, pady=5)
+        ttk.Button(btn_frame, text="⬇️ Reverse", command=lambda: self.both_motors(-150)).pack(side="left", padx=10, pady=5)
+        ttk.Button(btn_frame, text="🎯 Center Servo", command=lambda: self.set_servo(90)).pack(side="left", padx=10, pady=5)
 
         # Console Frame
         console_frame = ttk.LabelFrame(self.root, text="Console", padding=10)
         console_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.console = tk.Text(console_frame, height=5, state="disabled", bg="#1e1e1e", fg="#00ff00")
+        self.console = tk.Text(console_frame, height=6, state="disabled", bg="#1e1e1e", fg="#00ff00", font=("Courier", 10))
         self.console.pack(fill="both", expand=True)
 
     def refresh_ports(self):
@@ -229,26 +267,40 @@ class MotorControlGUI:
     def request_status(self):
         self.send_command("STATUS")
 
+    # Motor 1 controls
     def set_motor1(self, speed):
         self.motor1_speed.set(speed)
         self.m1_value_label.config(text=f"Speed: {speed}")
         self.send_command(f"M1:{speed}")
-
-    def set_motor2(self, speed):
-        self.motor2_speed.set(speed)
-        self.m2_value_label.config(text=f"Speed: {speed}")
-        self.send_command(f"M2:{speed}")
 
     def on_motor1_change(self):
         speed = int(self.motor1_speed.get())
         self.m1_value_label.config(text=f"Speed: {speed}")
         self.send_command(f"M1:{speed}")
 
+    # Motor 2 controls
+    def set_motor2(self, speed):
+        self.motor2_speed.set(speed)
+        self.m2_value_label.config(text=f"Speed: {speed}")
+        self.send_command(f"M2:{speed}")
+
     def on_motor2_change(self):
         speed = int(self.motor2_speed.get())
         self.m2_value_label.config(text=f"Speed: {speed}")
         self.send_command(f"M2:{speed}")
 
+    # Servo controls
+    def set_servo(self, angle):
+        self.servo_angle.set(angle)
+        self.servo_value_label.config(text=f"Angle: {angle}°")
+        self.send_command(f"SERVO:{angle}")
+
+    def on_servo_change(self):
+        angle = int(self.servo_angle.get())
+        self.servo_value_label.config(text=f"Angle: {angle}°")
+        self.send_command(f"SERVO:{angle}")
+
+    # Combined controls
     def stop_all(self):
         self.set_motor1(0)
         self.set_motor2(0)

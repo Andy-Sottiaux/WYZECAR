@@ -1,0 +1,51 @@
+UART Overview - DART-MX95
+========================
+
+The DART-MX95 expose up to eight LPUART interfaces, some of which are multiplexed with other peripherals.
+
+Serial Port    Device Node    Device Tree    DART-MX95 / DT8MCustomBoard
+-----------    -----------    -----------    ---------------------------
+UART1          /dev/ttyLP0    lpuart1        DT8MCustomboard serial console
+UART2          /dev/ttyLP1    lpuart2        Disabled by default, see datasheet
+UART3          /dev/ttyLP2    lpuart3        Disabled by default, used as Cortex-M7 console, connected to DT8MCustomboard J12.11 and J12.13
+UART4          /dev/ttyLP3    lpuart4        Disabled by default, see datasheet
+UART5          /dev/ttyLP4    lpuart5        1.8V Signal level, used on SOM for Bluetooth interface and can be accessible only if Bluetooth is disabled. [1]
+UART6          /dev/ttyLP5    lpuart6        Disabled by default, see datasheet
+UART7          /dev/ttyLP6    lpuart7        Disabled by default, see datasheet
+UART8          /dev/ttyLP7    lpuart8        Connected to DT8MCustomboard J12.4 and J12.6
+
+[1] See Disabling Bluetooth / Enabling UART5 (/dev/ttyLP4)
+
+Disabling Bluetooth / Enabling UART5 (/dev/ttyLP4)
+==================================================
+
+UART4/ttyLP4 is used by the Bluetooth on the SOM. To use it on the carrier, Bluetooth must be disabled on the SOM.
+
+First, disable variscite-bt by running:
+
+# systemctl stop variscite-bt; systemctl stop variscite-ot
+# systemctl disable variscite-bt; systemctl disable variscite-ot
+
+Then, disable bluetooth in the device tree imx95-var-dart.dtsi:
+
+&lpuart5 {
+   ...
+    bluetooth {
+        compatible = "nxp,88w8987-bt";
+        status = "disabled";
+    };
+   ...
+};
+
+Testing UART8
+=============
+
+The following demonstrates how to test UART8 on the DART-MX95 DT8MCustomboard following the table above.
+
+Short J12.4 and J12.6 pins and run the following commands:
+
+# stty -F /dev/ttyLP7 -echo -onlcr 115200
+# cat /dev/ttyLP7 &
+# echo hello > /dev/ttyLP7
+
+For each invocation of echo command the "hello" string should appear on the terminal.

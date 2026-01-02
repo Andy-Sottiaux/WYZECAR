@@ -1,4 +1,4 @@
-# Ubuntu 22.04 + ROS2 Humble environment for DART-MX95 development
+# Ubuntu 22.04 + ROS2 Humble + YOLO Vision environment for DART-MX95
 ARG UBUNTU_VERSION=22.04
 FROM ubuntu:${UBUNTU_VERSION}
 
@@ -18,7 +18,10 @@ RUN apt-get update && \
         build-essential \
         git \
         python3-pip \
-        sudo && \
+        sudo \
+        v4l-utils \
+        libv4l-dev \
+        i2c-tools && \
     locale-gen en_US en_US.UTF-8 && \
     rm -rf /var/lib/apt/lists/*
 
@@ -28,11 +31,22 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o 
     apt-get update && \
     apt-get install -y --no-install-recommends \
         ros-${ROS_DISTRO}-desktop \
+        ros-${ROS_DISTRO}-v4l2-camera \
+        ros-${ROS_DISTRO}-image-transport \
+        ros-${ROS_DISTRO}-cv-bridge \
+        ros-${ROS_DISTRO}-vision-msgs \
         python3-argcomplete \
         python3-colcon-common-extensions \
         python3-rosdep \
         python3-vcstool && \
     rm -rf /var/lib/apt/lists/*
+
+# Python packages for YOLO and I2C
+RUN pip3 install --no-cache-dir \
+    ultralytics \
+    opencv-python-headless \
+    smbus2 \
+    numpy
 
 # Initialize rosdep database (ignore if already initialized)
 RUN rosdep init 2>/dev/null || true

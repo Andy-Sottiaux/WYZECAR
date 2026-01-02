@@ -6,7 +6,7 @@
 SYSTEM OVERVIEW
 ---------------
 - DART-MX95: Vision processing, YOLO detection, ROS2 control system
-- ESP32 WROOM: Real-time motor controller (receives commands via UART)
+- ESP32 WROOM: Real-time motor controller (receives commands via I2C)
 - L298N: Dual H-Bridge motor driver for DC motors
 - CAM2C CUM10330_MOD: USB-C camera for human detection and tracking
 - Steering Servo: Controlled by ESP32 for navigation
@@ -48,7 +48,7 @@ Power Requirements:
 - Main Battery: 7-12V, 5A capacity recommended
 - L298N 5V regulator: Powers Servo only (~800mA peak for HS-85MG)
 - DART-MX95: Self-powered via 12V DC input + powers ESP32 via J6 header
-- ESP32: Powered from DART-MX95 J6 header 5V (~150mA)
+- ESP32: Powered externally (buck converter from main battery)
 - Camera: USB-C powered directly from DART-MX95
 - Hitec HS-85MG Servo: High-performance metal gear servo, 5V, 800mA stall
 
@@ -64,15 +64,18 @@ Power Requirements:
         |                                        |
         |  J32 (USB Debug) - for development     |
         |                                        |
-        |  J6 (UART/I2C Header)                  |
-        |  +---+---+---+---+---+---+---+---+    |
-        |  |5V |GND| TX| RX|   |   |   |   |    |
-        |  +---+---+---+---+---+---+---+---+    |
-        |    |   |   |   |                      |
-        |    |   |   |   +-------> ESP32 GPIO16 (RX)
-        |    |   |   +-----------> ESP32 GPIO17 (TX)
-        |    |   +-----------> ESP32 GND        |
-        |    +--------------> ESP32 VIN (5V)    |
+        |  J6 (I2C, UART & ENET MDIO Header)     |
+        |  20-pin header - Using I2C3:           |
+        |  Pin 9:  3.3V Power                    |
+        |  Pin 12: GND                           |
+        |  Pin 15: GND                           |
+        |  Pin 18: I2C3_SCL                      |
+        |  Pin 20: I2C3_SDA                      |
+        |                                        |
+        |  Connections to ESP32:                 |
+        |  Pin 18 ---> ESP32 GPIO22 (SCL)       |
+        |  Pin 20 ---> ESP32 GPIO21 (SDA)       |
+        |  Pin 12 ---> ESP32 GND                |
         |                                        |
         +----------------------------------------+
 
@@ -81,26 +84,27 @@ Power Requirements:
                    +------------------+
                    |      USB         |
                    |                  |
-              3V3  | o            o | VIN <-------- DART-MX95 J6 Pin 1 (5V)
-              GND  | o            o | GND --------> DART-MX95 J6 Pin 2 (GND)
+              3V3  | o            o | VIN <-------- Buck Converter 5V
+              GND  | o            o | GND --------> DART-MX95 J6 Pin 15
               D15  | o            o | D13 (GPIO13) -> IN4
               D2   | o            o | D12 (GPIO12) -> IN3
               D4   | o            o | D14 (GPIO14) -> ENB
-         RX2  D16  | o            o | D27 (GPIO27) -> IN2
-         TX2  D17  | o            o | D26 (GPIO26) -> IN1
+              D16  | o            o | D27 (GPIO27) -> IN2
+              D17  | o            o | D26 (GPIO26) -> IN1
               D5   | o            o | D25 (GPIO25) -> ENA
               D18  | o            o | D33 ---------> Servo Signal
               D19  | o            o | D32
-              D21  | o            o | D35
-              D22  | o            o | D34
+        SDA   D21  | o            o | D35
+        SCL   D22  | o            o | D34
               D23  | o            o | VN
                    |      EN  BOOT  |
                    +------------------+
 
-UART Communication:
-- ESP32 GPIO16 (RX2) <-- DART-MX95 UART TX
-- ESP32 GPIO17 (TX2) --> DART-MX95 UART RX
+I2C Communication:
+- ESP32 GPIO21 (SDA) <--> DART-MX95 I2C3_SDA (J6 Pin 20)
+- ESP32 GPIO22 (SCL) <--> DART-MX95 I2C3_SCL (J6 Pin 18)
 - Common GND connection
+- ESP32 Address: 0x42 (I2C slave mode)
 
 
                       L298N MODULE
@@ -170,14 +174,15 @@ ESP32 Pin     Servo Pin     Function
 ---------     ---------     --------
 GPIO33        Signal        Servo PWM Control (50Hz, 1-2ms pulse width)
 
-DART-MX95 TO ESP32 (UART + Power):
+DART-MX95 TO ESP32 (I2C + Power):
 ----------------------------------
-DART Pin      ESP32 Pin     Function
---------      ---------     --------
-J6 Pin 1 (5V) VIN           ESP32 Power Supply
-J6 Pin 2 (GND) GND          Common Ground
-J6 Pin 3 (TX) GPIO16 (RX2)  Command transmission
-J6 Pin 4 (RX) GPIO17 (TX2)  Status feedback
+DART Pin        ESP32 Pin     Function
+--------        ---------     --------
+J6 Pin 18 (SCL) GPIO22 (SCL)  I2C Clock Line
+J6 Pin 20 (SDA) GPIO21 (SDA)  I2C Data Line
+J6 Pin 12 (GND) GND           Common Ground
+
+Note: I2C3 bus (/dev/i2c-3) - ESP32 slave address 0x42
 
 CAMERA CONNECTION:
 ------------------
@@ -191,7 +196,7 @@ Source        Destination   Function
 ------        -----------   --------
 Main Battery  L298N +12V    Motor power
 Main Battery  DART DC Jack  System power
-DART-MX95 J6  ESP32 VIN     ESP32 power (5V, 150mA)
+Buck Conv 5V  ESP32 VIN     ESP32 power (5V, 150mA)
 L298N 5V      Servo VCC     HS-85MG power (5V, 800mA peak)
 
 MOTORS:
@@ -209,7 +214,7 @@ All grounds MUST be connected together in a star configuration:
   |
   +-- L298N GND terminal
   |
-  +-- ESP32 GND (via DART-MX95 J6 Pin 2)
+  +-- ESP32 GND (via DART-MX95 J6 Pin 15)
   |
   +-- DART-MX95 GND (via J6 header and power jack)
   |
@@ -219,43 +224,42 @@ Use thick gauge wire (16 AWG minimum) for ground connections.
 Keep ground wires as short as possible to minimize noise.
 
 ================================================================================
-                    COMMUNICATION PROTOCOL (UART)
+                    COMMUNICATION PROTOCOL (I2C)
 ================================================================================
 
-DART-MX95 to ESP32 Commands (115200 baud, 8N1):
-------------------------------------------------
-MOTOR <motor> <direction> <speed>
-  motor: A or B
-  direction: FORWARD, BACKWARD, STOP
-  speed: 0-100 (percentage)
-  Example: "MOTOR A FORWARD 75\n"
+DART-MX95 to ESP32 Commands (I2C3 bus, address 0x42):
+------------------------------------------------------
+Write Command 0x01: Set motor speeds
+  Data: [0x01, left_speed, right_speed, servo_angle]
+  left_speed/right_speed: -100 to +100 (signed 8-bit)
+  servo_angle: 0-180 degrees
+  Example: Set left=75%, right=50%, servo=90° -> [0x01, 75, 50, 90]
 
-SERVO <angle>
-  angle: 0-180 degrees
-  Example: "SERVO 90\n"
+Write Command 0x02: Emergency stop
+  Data: [0x02]
+  Stops all motors immediately
 
-STOP
-  Emergency stop all motors
-  Example: "STOP\n"
+Write Command 0x03: Request status
+  Data: [0x03]
+  Triggers ESP32 to prepare status response
 
-STATUS
-  Request ESP32 status
-  Example: "STATUS\n"
+ESP32 to DART-MX95 Responses (Read operations):
+-----------------------------------------------
+Status Response (3 bytes):
+  Byte 0: Current left motor speed (-100 to +100)
+  Byte 1: Current right motor speed (-100 to +100)  
+  Byte 2: Status flags
+    Bit 0: Left motor enabled
+    Bit 1: Right motor enabled
+    Bit 2: Emergency stop active
+    Bit 3: Motor driver fault
+    Bits 4-7: Reserved
 
-ESP32 to DART-MX95 Responses:
------------------------------
-OK
-  Command executed successfully
-
-ERROR <message>
-  Command failed with reason
-
-STATUS motor_a:<speed> motor_b:<speed> servo:<angle>
-  Current system status
-  Example: "STATUS motor_a:75 motor_b:50 servo:90\n"
-
-WATCHDOG
-  Periodic heartbeat (sent every 500ms)
+I2C Advantages:
+- Built-in error detection and acknowledgment
+- No baud rate configuration needed
+- Multiple devices on same bus possible
+- Hardware flow control built-in
 
 ================================================================================
                           WIRING CHECKLIST
@@ -265,8 +269,8 @@ POWER:
 [ ] Main battery to L298N +12V terminal
 [ ] Main battery to DART-MX95 12V DC jack (J30)
 [ ] L298N 5V jumper installed (ON position)
-[ ] DART-MX95 J6 Pin 1 (5V) to ESP32 VIN
-[ ] DART-MX95 J6 Pin 2 (GND) to ESP32 GND
+[ ] Buck converter 5V output to ESP32 VIN
+[ ] DART-MX95 J6 Pin 15 (GND) to ESP32 GND
 [ ] L298N 5V to Hitec HS-85MG Servo VCC
 
 MOTOR CONTROL (ESP32 to L298N):
@@ -280,9 +284,9 @@ MOTOR CONTROL (ESP32 to L298N):
 SERVO CONTROL:
 [ ] ESP32 GPIO33 to Hitec HS-85MG signal wire
 
-COMMUNICATION (UART):
-[ ] DART-MX95 J6 Pin 3 (TX) to ESP32 GPIO16 (RX2)
-[ ] DART-MX95 J6 Pin 4 (RX) to ESP32 GPIO17 (TX2)
+COMMUNICATION (I2C):
+[ ] DART-MX95 J6 Pin 18 (I2C3_SCL) to ESP32 GPIO22 (SCL)
+[ ] DART-MX95 J6 Pin 20 (I2C3_SDA) to ESP32 GPIO21 (SDA)
 
 CAMERA:
 [ ] CAM2C CUM10330_MOD USB-C to DART-MX95 J33
@@ -324,10 +328,14 @@ Camera not detected:
   - Try different USB-C cable
 
 Communication errors:
-  - Verify UART baud rate (115200)
-  - Check TX/RX connections (may be reversed)
-  - Test with minicom or similar terminal program
+  - Verify I2C bus availability: i2cdetect -y 3
+  - Check SDA/SCL connections (J6 Pin 20=SDA, Pin 18=SCL)
+  - I2C3 maps to /dev/i2c-3 in Linux
+  - Test with i2c-tools: i2cget, i2cset commands
   - Ensure common ground between devices
+  - Check ESP32 I2C slave address (should be 0x42)
+  - IMPORTANT: ESP32 firmware MUST use ESP-IDF I2C API, not Arduino Wire!
+  - If "i2c driver install error" appears, the firmware is wrong
 
 Hitec HS-85MG servo jittering:
   - Check 5V power stability at servo (L298N regulator)
@@ -349,7 +357,7 @@ DART-MX95 not booting:
 1. Flash ESP32 with motor control firmware
 2. Set up ROS2 environment on DART-MX95
 3. Install camera drivers and YOLO detection
-4. Configure UART communication between systems
+4. Configure I2C communication between systems
 5. Implement human following algorithm
 6. Add safety systems and emergency stops
 

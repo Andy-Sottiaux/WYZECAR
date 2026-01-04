@@ -67,20 +67,20 @@ class FollowerNode(Node):
     def __init__(self):
         super().__init__('follower')
         
-        # Parameters
-        self.declare_parameter('target_distance', 0.4)  # Normalized (0=very close, 1=far)
-        self.declare_parameter('max_linear_speed', 0.5)  # m/s equivalent
-        self.declare_parameter('max_angular_speed', 1.0)  # rad/s equivalent
+        # Parameters - tuned for smooth, gentle following
+        self.declare_parameter('target_distance', 0.45)  # Normalized (0=very close, 1=far)
+        self.declare_parameter('max_linear_speed', 0.3)  # m/s equivalent (reduced for smooth operation)
+        self.declare_parameter('max_angular_speed', 0.6)  # rad/s equivalent (reduced for smooth turns)
         self.declare_parameter('lost_timeout', 2.0)  # seconds
-        self.declare_parameter('dead_zone', 0.1)  # Normalized, no movement if within
+        self.declare_parameter('dead_zone', 0.15)  # Larger dead zone = less jitter
         
-        # PID parameters
-        self.declare_parameter('linear_kp', 0.8)
-        self.declare_parameter('linear_ki', 0.05)
-        self.declare_parameter('linear_kd', 0.1)
-        self.declare_parameter('angular_kp', 1.2)
-        self.declare_parameter('angular_ki', 0.02)
-        self.declare_parameter('angular_kd', 0.15)
+        # PID parameters - lower gains for smoother control
+        self.declare_parameter('linear_kp', 0.5)  # Reduced from 0.8
+        self.declare_parameter('linear_ki', 0.02)  # Reduced from 0.05
+        self.declare_parameter('linear_kd', 0.15)  # Slightly more damping
+        self.declare_parameter('angular_kp', 0.7)  # Reduced from 1.2
+        self.declare_parameter('angular_ki', 0.01)  # Reduced from 0.02
+        self.declare_parameter('angular_kd', 0.2)  # More damping for smooth turns
         
         self.target_distance = self.get_parameter('target_distance').get_parameter_value().double_value
         self.max_linear = self.get_parameter('max_linear_speed').get_parameter_value().double_value

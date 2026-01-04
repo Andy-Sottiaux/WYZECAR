@@ -121,15 +121,15 @@ class FollowerController(Node):
         self.declare_parameter('max_distance', 0.85)       # Beyond this, full speed
         
         # === Speed Limits ===
-        self.declare_parameter('max_linear_speed', 0.55)
+        self.declare_parameter('max_linear_speed', 0.7)
         self.declare_parameter('max_angular_speed', 1.0)
-        self.declare_parameter('min_linear_speed', 0.1)    # Minimum to overcome friction
+        self.declare_parameter('min_linear_speed', 0.25)   # Higher minimum to overcome friction
         
         # === Control Gains ===
         self.declare_parameter('angular_gain', 1.5)        # Horizontal error gain
         self.declare_parameter('angular_velocity_gain', 0.3)  # Velocity feedforward
-        self.declare_parameter('linear_gain', 0.8)         # Distance error gain
-        self.declare_parameter('linear_velocity_gain', 0.4)   # Velocity matching
+        self.declare_parameter('linear_gain', 1.2)         # Distance error gain (higher for response)
+        self.declare_parameter('linear_velocity_gain', 0.5)   # Velocity matching
         
         # === Behavior Tuning ===
         self.declare_parameter('turn_speed_coupling', 0.5) # How much turning slows forward

@@ -67,20 +67,20 @@ class FollowerNode(Node):
     def __init__(self):
         super().__init__('follower')
         
-        # Parameters - gentle, smooth following
+        # Parameters - smooth following with responsive steering
         self.declare_parameter('target_distance', 0.45)  # Normalized (0=very close, 1=far)
-        self.declare_parameter('max_linear_speed', 0.2)  # m/s equivalent (gentle speed)
-        self.declare_parameter('max_angular_speed', 0.35)  # rad/s equivalent (smooth turns)
+        self.declare_parameter('max_linear_speed', 0.3)  # m/s equivalent (moderate speed)
+        self.declare_parameter('max_angular_speed', 1.0)  # rad/s equivalent (full steering range)
         self.declare_parameter('lost_timeout', 2.0)  # seconds
-        self.declare_parameter('dead_zone', 0.15)  # Larger dead zone = less jitter
+        self.declare_parameter('dead_zone', 0.12)  # Moderate dead zone
         
-        # PID parameters - gentle, smooth control
-        self.declare_parameter('linear_kp', 0.4)
+        # PID parameters - responsive steering, smooth forward motion
+        self.declare_parameter('linear_kp', 0.5)
         self.declare_parameter('linear_ki', 0.02)
-        self.declare_parameter('linear_kd', 0.15)
-        self.declare_parameter('angular_kp', 0.5)
-        self.declare_parameter('angular_ki', 0.01)
-        self.declare_parameter('angular_kd', 0.2)
+        self.declare_parameter('linear_kd', 0.12)
+        self.declare_parameter('angular_kp', 0.8)
+        self.declare_parameter('angular_ki', 0.02)
+        self.declare_parameter('angular_kd', 0.15)
         
         self.target_distance = self.get_parameter('target_distance').get_parameter_value().double_value
         self.max_linear = self.get_parameter('max_linear_speed').get_parameter_value().double_value

@@ -47,7 +47,7 @@
 #define SERVO_MIN_US 1300   // Minimum pulse width (full left)
 #define SERVO_MAX_US 1700   // Maximum pulse width (full right)
 #define SERVO_CENTER_US 1500 // Center pulse width
-#define SERVO_DEADBAND 5     // Degrees - ignore small changes to prevent buzzing
+#define SERVO_DEADBAND 10    // Degrees - ignore small changes to prevent buzzing
 
 // LED Pin
 #define LED_PIN 2

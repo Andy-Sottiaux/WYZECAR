@@ -102,7 +102,7 @@ case "${1:-all}" in
       exit 1
     fi
     
-    # Human detector using OpenCV DNN + MobileNet-SSD (stable on ARM!)
+    # Motion-based detector (ultra-lightweight, no AI!)
     # Set DISABLE_DETECTION=1 to run in passthrough mode (just video feed)
     DETECT_DISABLE_FLAG=""
     if [ "${DISABLE_DETECTION:-0}" = "1" ]; then
@@ -111,13 +111,13 @@ case "${1:-all}" in
     fi
     $STDBUF_CMD ros2 run wyzecar_vision human_detector --ros-args \
       -p process_every_n_frames:=2 \
-      -p input_size:=300 \
-      -p confidence_threshold:=0.5 \
+      -p motion_threshold:=25 \
+      -p min_area:=1500 \
       $DETECT_DISABLE_FLAG \
       >> "$DETLOG" 2>&1 &
     DET_PID=$!
     if [ -z "$DETECT_DISABLE_FLAG" ]; then
-      echo "  ✓ Human detector (MobileNet-SSD @ 300px)"
+      echo "  ✓ Motion detector (lightweight)"
     fi
     sleep 5
     if ! kill -0 "$DET_PID" 2>/dev/null; then
@@ -227,7 +227,7 @@ case "${1:-all}" in
     echo ""
     echo "Individual nodes (for debugging):"
     echo "  camera   - Camera only (verbose)"
-    echo "  detector - Human detector only (MobileNet-SSD)"
+    echo "  detector - Motion detector only (lightweight)"
     echo "  follower - Follower only (verbose)"
     echo "  motor    - Motor controller only (verbose)"
     echo "  web      - Web viewer only"

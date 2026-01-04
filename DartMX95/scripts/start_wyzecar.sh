@@ -104,9 +104,6 @@ case "${1:-all}" in
     python3 /workspace/DartMX95/ros2/web_viewer.py
     ;;
     
-  help|--help|-h)
-    ;;
-    
   status)
     echo ""
     echo "Active ROS2 nodes:"

@@ -123,6 +123,7 @@ class FollowerNode(Node):
         
         # Core parameters
         self.declare_parameter('target_distance', 0.4)
+        self.declare_parameter('stop_distance', 0.25)  # Stop completely when this close
         self.declare_parameter('max_linear_speed', 0.55)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('lost_timeout', 1.5)
@@ -143,6 +144,7 @@ class FollowerNode(Node):
         
         # Load parameters
         self.target_distance = self.get_parameter('target_distance').get_parameter_value().double_value
+        self.stop_distance = self.get_parameter('stop_distance').get_parameter_value().double_value
         self.max_linear = self.get_parameter('max_linear_speed').get_parameter_value().double_value
         self.max_angular = self.get_parameter('max_angular_speed').get_parameter_value().double_value
         self.lost_timeout = self.get_parameter('lost_timeout').get_parameter_value().double_value
@@ -184,6 +186,7 @@ class FollowerNode(Node):
         self.cmd_count = 0
         self.get_logger().info('Advanced Follower started')
         self.get_logger().info(f'  Target distance: {self.target_distance}')
+        self.get_logger().info(f'  Stop distance: {self.stop_distance}')
         self.get_logger().info(f'  Max speeds: linear={self.max_linear}, angular={self.max_angular}')
     
     def log_status(self):
@@ -251,6 +254,13 @@ class FollowerNode(Node):
         angular_error = -predicted_x
         angular_cmd = self.angular_pid.compute(angular_error)
         
+        # Check if we're close enough to stop
+        if self.tracker.distance <= self.stop_distance:
+            # Close enough - stop forward motion, but still allow steering
+            cmd.linear.x = 0.0
+            cmd.angular.z = float(max(-self.max_angular, min(self.max_angular, angular_cmd)))
+            return cmd
+        
         # Linear control - maintain distance
         distance_error = self.tracker.distance - self.target_distance
         linear_cmd = self.linear_pid.compute(distance_error)
@@ -265,10 +275,6 @@ class FollowerNode(Node):
         if off_center > 0.3:
             center_factor = 1.0 - (off_center - 0.3) * self.centering_priority
             linear_cmd *= max(0.2, center_factor)
-        
-        # Don't drive forward into target
-        if self.tracker.distance < self.target_distance * 0.4:
-            linear_cmd = min(0, linear_cmd)  # Only reverse
         
         # Clamp
         cmd.linear.x = float(max(-self.max_linear, min(self.max_linear, linear_cmd)))

@@ -39,9 +39,9 @@ class SmoothMotorController(Node):
         # ROS2 Parameters
         self.declare_parameter('i2c_bus', 3)
         self.declare_parameter('esp32_address', 0x42)
-        self.declare_parameter('max_speed_percent', 55)  # Good tracking speed
-        self.declare_parameter('acceleration_rate', 20.0)  # % per second (smooth ramp)
-        self.declare_parameter('deceleration_rate', 25.0)  # % per second (smooth braking)
+        self.declare_parameter('max_speed_percent', 70)  # Strong tracking speed
+        self.declare_parameter('acceleration_rate', 30.0)  # % per second (responsive ramp)
+        self.declare_parameter('deceleration_rate', 35.0)  # % per second (responsive braking)
         self.declare_parameter('servo_slew_rate', 120.0)  # degrees per second (responsive steering)
         self.declare_parameter('command_timeout', 2.0)
         self.declare_parameter('control_rate', 25.0)  # Hz - smooth motion

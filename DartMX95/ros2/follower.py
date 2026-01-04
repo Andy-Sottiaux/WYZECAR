@@ -69,7 +69,7 @@ class FollowerNode(Node):
         
         # Parameters - smooth following with responsive steering
         self.declare_parameter('target_distance', 0.45)  # Normalized (0=very close, 1=far)
-        self.declare_parameter('max_linear_speed', 0.4)  # m/s equivalent (good tracking)
+        self.declare_parameter('max_linear_speed', 0.55)  # m/s equivalent (strong tracking)
         self.declare_parameter('max_angular_speed', 1.0)  # rad/s equivalent (full steering range)
         self.declare_parameter('lost_timeout', 2.0)  # seconds
         self.declare_parameter('dead_zone', 0.12)  # Moderate dead zone

@@ -21,6 +21,10 @@ export PYTHONUNBUFFERED=1
 
 # Line-buffered output so logs flush immediately
 export STDBUF_CMD="stdbuf -oL -eL"
+if ! command -v stdbuf >/dev/null 2>&1; then
+  # Some minimal images don't have coreutils/stdbuf. Don't fail the whole run.
+  STDBUF_CMD=""
+fi
 
 # Source ROS2
 source /opt/ros/humble/setup.bash
@@ -59,6 +63,11 @@ case "${1:-all}" in
     FOLLOG="$RUNLOGDIR/follower.log"
     MOTLOG="$RUNLOGDIR/motor.log"
     WEBLOG="$RUNLOGDIR/web.log"
+    : > "$CAMLOG"
+    : > "$DETLOG"
+    : > "$FOLLOG"
+    : > "$MOTLOG"
+    : > "$WEBLOG"
 
     echo "=== WYZECAR run $TIMESTAMP ===" > "$LOGFILE"
     echo "Logs:" >> "$LOGFILE"
@@ -69,6 +78,10 @@ case "${1:-all}" in
     echo "  web:      $WEBLOG" >> "$LOGFILE"
     echo "" >> "$LOGFILE"
 
+    # If anything errors out, capture context in run.log
+    trap 'echo "[FATAL] start_wyzecar.sh failed at $(date -Iseconds). Last 60 lines of camera/detector/follower/motor/web logs:" >> "$LOGFILE"; \
+          for f in "$CAMLOG" "$DETLOG" "$FOLLOG" "$MOTLOG" "$WEBLOG"; do echo "----- $f -----" >> "$LOGFILE"; tail -n 60 "$f" >> "$LOGFILE" || true; done' ERR
+
     # Camera at 320x240 UYVY (MJPG not supported by v4l2_camera)
     $STDBUF_CMD ros2 run v4l2_camera v4l2_camera_node --ros-args \
       -p video_device:=/dev/video13 \
@@ -78,6 +91,10 @@ case "${1:-all}" in
     CAM_PID=$!
     echo "  ✓ Camera node (320x240)"
     sleep 2
+    if ! kill -0 "$CAM_PID" 2>/dev/null; then
+      echo "[FATAL] Camera node exited immediately. See $CAMLOG" >> "$LOGFILE"
+      exit 1
+    fi
     
     # Human detector with aggressive frame skipping for ARM CPU
     $STDBUF_CMD ros2 run wyzecar_vision human_detector --ros-args \
@@ -88,12 +105,20 @@ case "${1:-all}" in
     DET_PID=$!
     echo "  ✓ Human detector (YOLO @ 256px, skip 5)"
     sleep 5
+    if ! kill -0 "$DET_PID" 2>/dev/null; then
+      echo "[FATAL] Human detector exited immediately. See $DETLOG" >> "$LOGFILE"
+      exit 1
+    fi
     
     $STDBUF_CMD ros2 run wyzecar_vision follower \
       >> "$FOLLOG" 2>&1 &
     FOL_PID=$!
     echo "  ✓ Follower controller"
     sleep 1
+    if ! kill -0 "$FOL_PID" 2>/dev/null; then
+      echo "[FATAL] Follower exited immediately. See $FOLLOG" >> "$LOGFILE"
+      exit 1
+    fi
     
     $STDBUF_CMD ros2 run wyzecar_control motor_controller --ros-args \
       -p i2c_bus:=3 \
@@ -102,6 +127,10 @@ case "${1:-all}" in
     MOT_PID=$!
     echo "  ✓ Motor controller"
     sleep 1
+    if ! kill -0 "$MOT_PID" 2>/dev/null; then
+      echo "[FATAL] Motor controller exited immediately. See $MOTLOG" >> "$LOGFILE"
+      exit 1
+    fi
     
     echo ""
     echo "════════════════════════════════════════════"

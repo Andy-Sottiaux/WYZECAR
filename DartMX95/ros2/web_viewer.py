@@ -568,6 +568,8 @@ class WebViewerNode(Node):
         self.cmd_vel_sub = self.create_subscription(
             Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         
+        self.get_logger().info('Subscribed to: /debug_image, /image_raw, /target_person, /cmd_vel')
+        
         self.has_debug = False
         self.frame_times = []
         self.cmd_times = []
@@ -630,8 +632,16 @@ class WebViewerNode(Node):
     def update_metrics(self):
         now = time.time()
         with state_lock:
+            target_age = now - state['target_ts'] if state['target_ts'] > 0 else 999
+            
+            # Log subscription status periodically
+            self.get_logger().info(
+                f'[STATUS] frames={state["frame_count"]} cmds={state["cmd_count"]} '
+                f'target_age={target_age:.1f}s'
+            )
+            
             # Clear stale data
-            if now - state['target_ts'] > 1.5:
+            if target_age > 1.5:
                 state['target'] = None
                 state['target_vx'] = 0.0
                 state['target_vd'] = 0.0

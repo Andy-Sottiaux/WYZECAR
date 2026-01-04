@@ -185,9 +185,9 @@ class FollowerNode(Node):
         if target['distance'] < self.target_distance * 0.5:
             linear_cmd = min(0, linear_cmd)  # Only allow reversing
         
-        # Set velocity command
-        cmd.linear.x = linear_cmd
-        cmd.angular.z = angular_cmd
+        # Set velocity command (must be float)
+        cmd.linear.x = float(linear_cmd)
+        cmd.angular.z = float(angular_cmd)
         
         # Log periodically
         self.get_logger().debug(

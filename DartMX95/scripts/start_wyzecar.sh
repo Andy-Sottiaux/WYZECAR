@@ -9,6 +9,13 @@ mkdir -p $LOGDIR
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE="$LOGDIR/wyzecar_$TIMESTAMP.log"
 
+# Make Ultralytics cache writable inside container (prevents warnings + partial writes)
+export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-/tmp/Ultralytics}"
+mkdir -p "$YOLO_CONFIG_DIR" 2>/dev/null || true
+
+# Ensure Python flushes logs promptly when redirected
+export PYTHONUNBUFFERED=1
+
 # Source ROS2
 source /opt/ros/humble/setup.bash
 source /workspace/wyzecar_ws/install/setup.bash 2>/dev/null || true
@@ -45,6 +52,7 @@ case "${1:-all}" in
     ros2 run v4l2_camera v4l2_camera_node --ros-args \
       -p video_device:=/dev/video13 \
       -p image_size:=[320,240] \
+      -p pixel_format:=UYVY \
       >> "$LOGFILE" 2>&1 &
     echo "  ✓ Camera node (320x240)"
     sleep 2

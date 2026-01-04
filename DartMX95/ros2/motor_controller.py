@@ -363,14 +363,19 @@ class MotorControllerI2CNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     
+    motor_controller = None
     try:
         motor_controller = MotorControllerI2CNode()
         rclpy.spin(motor_controller)
     except KeyboardInterrupt:
         pass
     finally:
-        motor_controller.destroy_node()
-        rclpy.shutdown()
+        try:
+            if motor_controller is not None:
+                motor_controller.destroy_node()
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()
 
 
 if __name__ == '__main__':

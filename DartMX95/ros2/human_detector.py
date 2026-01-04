@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 import threading
 import time
+import os
 
 try:
     from ultralytics import YOLO
@@ -43,15 +44,20 @@ class HumanDetectorNode(Node):
         self.declare_parameter('confidence_threshold', 0.4)
         self.declare_parameter('min_box_area', 3000)
         self.declare_parameter('input_size', 256)
+        # Run YOLO only every N frames to keep the pipeline responsive on ARM
+        self.declare_parameter('process_every_n_frames', 5)
         
         self.model_name = self.get_parameter('model').get_parameter_value().string_value
         self.conf_threshold = self.get_parameter('confidence_threshold').get_parameter_value().double_value
         self.min_box_area = self.get_parameter('min_box_area').get_parameter_value().integer_value
         self.input_size = self.get_parameter('input_size').get_parameter_value().integer_value
+        self.process_every_n_frames = self.get_parameter('process_every_n_frames').get_parameter_value().integer_value
+        if self.process_every_n_frames < 1:
+            self.process_every_n_frames = 1
         
         # Load YOLO model
         self.get_logger().info(f'Loading YOLO model: {self.model_name}')
-        self.model = YOLO(self.model_name)
+        self.model = self._load_yolo_model_with_recovery(self.model_name)
         self.get_logger().info('YOLO model loaded successfully')
         
         self.bridge = CvBridge()
@@ -60,6 +66,7 @@ class HumanDetectorNode(Node):
         self.lock = threading.Lock()
         self.latest_frame = None
         self.latest_header = None
+        self.latest_frame_id = 0
         self.latest_detections = []  # List of person detections
         self.yolo_fps = 0.0
         
@@ -86,6 +93,36 @@ class HumanDetectorNode(Node):
         
         self.get_logger().info('Human Detector Node started (THREADED)')
         self.get_logger().info(f'  Model: {self.model_name} @ {self.input_size}px')
+        self.get_logger().info(f'  Process every {self.process_every_n_frames} frames')
+
+    def _load_yolo_model_with_recovery(self, model_name: str):
+        """
+        Load YOLO model, and if the weights file is corrupted (common symptom: EOFError / 'Ran out of input'),
+        delete the local weights and retry once.
+        """
+        try:
+            return YOLO(model_name)
+        except Exception as e:
+            msg = str(e)
+            self.get_logger().error(f'YOLO model load failed: {msg}')
+
+            # Only attempt recovery for common corrupted-file signatures
+            recoverable = ('Ran out of input' in msg) or ('EOFError' in msg)
+            if not recoverable:
+                raise
+
+            # If model_name is a local file, try deleting it and retry
+            if os.path.exists(model_name) and os.path.isfile(model_name):
+                try:
+                    os.remove(model_name)
+                    self.get_logger().warn(f'Deleted corrupted model file: {model_name}. Retrying download/load...')
+                except Exception as rm_e:
+                    self.get_logger().error(f'Failed to delete corrupted model file {model_name}: {rm_e}')
+                    raise
+            else:
+                self.get_logger().warn('Model appears to be cached elsewhere; retrying load once anyway...')
+
+            return YOLO(model_name)
 
     def image_callback(self, msg):
         """Just save the latest frame - don't process here!"""
@@ -96,6 +133,7 @@ class HumanDetectorNode(Node):
             with self.lock:
                 self.latest_frame = cv_image
                 self.latest_header = msg.header
+                self.latest_frame_id = self.frame_count
         except Exception as e:
             self.get_logger().error(f'Failed to convert image: {e}')
 
@@ -103,12 +141,24 @@ class HumanDetectorNode(Node):
         """Background thread that runs YOLO on latest frame"""
         self.get_logger().info('YOLO worker thread started')
         
+        last_processed_id = 0
         while self.running:
             # Grab latest frame
             with self.lock:
                 if self.latest_frame is None:
                     time.sleep(0.01)
                     continue
+                frame_id = self.latest_frame_id
+                if frame_id == last_processed_id:
+                    time.sleep(0.01)
+                    continue
+
+                # Frame skipping: only process every N frames
+                if (frame_id % self.process_every_n_frames) != 0:
+                    last_processed_id = frame_id
+                    time.sleep(0.001)
+                    continue
+
                 frame = self.latest_frame.copy()
                 header = self.latest_header
             
@@ -175,6 +225,7 @@ class HumanDetectorNode(Node):
             # Calculate FPS
             elapsed = time.time() - start_time
             self.yolo_fps = 1.0 / elapsed if elapsed > 0 else 0
+            last_processed_id = frame_id
 
     def publish_debug(self):
         """Publish annotated debug image at steady rate"""
@@ -234,7 +285,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        rclpy.shutdown()
+        try:
+            if 'node' in locals() and node is not None:
+                node.destroy_node()
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()
 
 
 if __name__ == '__main__':

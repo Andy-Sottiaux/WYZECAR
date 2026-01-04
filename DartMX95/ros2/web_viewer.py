@@ -598,6 +598,7 @@ class WebViewerNode(Node):
 
     def target_callback(self, msg):
         now = time.time()
+        self.get_logger().info(f'TARGET: x={msg.point.x:.2f} d={msg.point.z:.2f}')
         with state_lock:
             # Calculate velocities from previous target
             if state['target'] is not None and state['target_ts'] > 0:

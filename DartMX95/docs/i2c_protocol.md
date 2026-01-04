@@ -51,8 +51,8 @@ Command Protocol:
 DART-MX95 -> ESP32 commands (write operations):
 
 Cmd 0x01: Set motor speeds and servo
-  Data: [0x01, left_speed, right_speed, servo_angle]
-  left_speed/right_speed: -100 to +100 (signed 8-bit)
+  Data: [0x01, rear_speed, front_speed, servo_angle]
+  rear_speed/front_speed: -100 to +100 (signed 8-bit)
   servo_angle: 0-180 degrees
   Example: i2cset -y 3 0x42 0x01 50 50 90 i
 
@@ -65,11 +65,11 @@ Cmd 0x03: Request status
   Example: i2cset -y 3 0x42 0x03
 
 ESP32 -> DART-MX95 responses (read operations):
-Format: [left_speed, right_speed, status_byte]
+Format: [rear_speed, front_speed, status_byte]
 
 Status byte bits:
-- Bit 0: Left motor enabled
-- Bit 1: Right motor enabled  
+- Bit 0: Rear motor enabled
+- Bit 1: Front motor enabled  
 - Bit 2: Emergency stop active
 - Bit 3: Reserved
 - Bits 4-7: Reserved

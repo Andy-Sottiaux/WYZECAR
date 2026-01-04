@@ -58,7 +58,7 @@ class MotorControllerI2CNode(Node):
         self.declare_parameter('command_timeout', 2.0)  # seconds
         self.declare_parameter('servo_center', 90)  # Center position (1500µs)
         self.declare_parameter('servo_range', 90)   # Full range: 0-180° maps to 1300-1700µs
-        self.declare_parameter('servo_deadband', 5) # Degrees - ignore small changes to prevent buzzing
+        # Note: Servo deadband is now handled in ESP32 firmware (SERVO_DEADBAND = 5°)
         
         # Get parameters
         self.i2c_bus = self.get_parameter('i2c_bus').get_parameter_value().integer_value
@@ -69,7 +69,6 @@ class MotorControllerI2CNode(Node):
         self.command_timeout = self.get_parameter('command_timeout').get_parameter_value().double_value
         self.servo_center = self.get_parameter('servo_center').get_parameter_value().integer_value
         self.servo_range = self.get_parameter('servo_range').get_parameter_value().integer_value
-        self.servo_deadband = self.get_parameter('servo_deadband').get_parameter_value().integer_value
         
         # ROS2 Subscribers and Publishers
         self.cmd_vel_sub = self.create_subscription(
@@ -108,7 +107,7 @@ class MotorControllerI2CNode(Node):
         self.start_background_threads()
         
         self.get_logger().info(f'Motor Controller I2C Node started on bus {self.i2c_bus}, address 0x{self.esp32_address:02X}')
-        self.get_logger().info(f'Servo: {self.servo_center}° center, ±{self.servo_range}° range, {self.servo_deadband}° deadband')
+        self.get_logger().info(f'Servo: {self.servo_center}° center, ±{self.servo_range}° range (deadband in ESP32)')
         
         # Status tracking
         self.cmd_received_count = 0
@@ -121,7 +120,7 @@ class MotorControllerI2CNode(Node):
         """Periodic status logging"""
         if self.cmd_received_count > 0:
             self.get_logger().info(
-                f'[MOTOR] Cmds:{self.cmd_received_count} | Front={self.last_front}% Rear={self.last_rear}% Steer={self.last_servo}°'
+                f'[MOTOR] Cmds:{self.cmd_received_count} | Rear={self.last_rear}% Front={self.last_front}% Steer={self.last_servo}°'
             )
         self.cmd_received_count = 0
 
@@ -141,12 +140,12 @@ class MotorControllerI2CNode(Node):
             self.get_logger().error(f'Failed to initialize I2C bus {self.i2c_bus}: {e}')
             self.esp32_connected = False
 
-    def send_motor_command(self, front_speed, rear_speed, servo_angle=None):
+    def send_motor_command(self, rear_speed, front_speed, servo_angle=None):
         """Send motor speed command via I2C
         
         Args:
-            front_speed: Front motor speed (-100 to +100)
-            rear_speed: Rear motor speed (-100 to +100)
+            rear_speed: Rear motor speed (-100 to +100) - sent as byte 1
+            front_speed: Front motor speed (-100 to +100) - sent as byte 2
             servo_angle: Steering angle (0-180, 90=center)
         """
         if not self.i2c_bus_handle:
@@ -155,24 +154,20 @@ class MotorControllerI2CNode(Node):
         if servo_angle is None:
             servo_angle = self.current_servo_angle
         
-        # Apply servo deadband to prevent buzzing
-        # Only update servo if change exceeds deadband threshold
-        if abs(servo_angle - self.current_servo_angle) < self.servo_deadband:
-            servo_angle = self.current_servo_angle  # Keep previous position
-        else:
-            self.current_servo_angle = servo_angle
+        # Note: Servo deadband is now handled in ESP32 firmware
+        self.current_servo_angle = servo_angle
             
         # Clamp values to valid ranges
-        front_speed = max(-100, min(100, front_speed))
         rear_speed = max(-100, min(100, rear_speed))
+        front_speed = max(-100, min(100, front_speed))
         servo_angle = max(0, min(180, servo_angle))
         
         # Convert to unsigned bytes for I2C transmission
-        front_byte = front_speed if front_speed >= 0 else 256 + front_speed
         rear_byte = rear_speed if rear_speed >= 0 else 256 + rear_speed
+        front_byte = front_speed if front_speed >= 0 else 256 + front_speed
         
-        # I2C command: [CMD, front_motor, rear_motor, servo]
-        command = [0x01, front_byte, rear_byte, servo_angle]
+        # I2C command: [CMD, rear_motor, front_motor, servo]
+        command = [0x01, rear_byte, front_byte, servo_angle]
         
         with self.i2c_lock:
             try:
@@ -210,25 +205,25 @@ class MotorControllerI2CNode(Node):
                 response = self.i2c_bus_handle.read_i2c_block_data(self.esp32_address, 0, 3)
                 
                 # Parse response
-                front_speed_raw = response[0]
-                rear_speed_raw = response[1]
+                rear_speed_raw = response[0]
+                front_speed_raw = response[1]
                 status_flags = response[2]
                 
                 # Convert back to signed speeds
-                front_speed = front_speed_raw if front_speed_raw < 128 else front_speed_raw - 256
                 rear_speed = rear_speed_raw if rear_speed_raw < 128 else rear_speed_raw - 256
+                front_speed = front_speed_raw if front_speed_raw < 128 else front_speed_raw - 256
                 
                 # Parse status flags
-                motor_front_enabled = bool(status_flags & 0x01)
-                motor_rear_enabled = bool(status_flags & 0x02)
+                motor_rear_enabled = bool(status_flags & 0x01)
+                motor_front_enabled = bool(status_flags & 0x02)
                 emergency_stop = bool(status_flags & 0x04)
                 motor_fault = bool(status_flags & 0x08)
                 
-                self.publish_motor_status(front_speed, rear_speed, status_flags)
+                self.publish_motor_status(rear_speed, front_speed, status_flags)
                 
                 # Debug output
                 debug_msg = String()
-                debug_msg.data = f"Front:{front_speed}% Rear:{rear_speed}% Flags:0x{status_flags:02X}"
+                debug_msg.data = f"Rear:{rear_speed}% Front:{front_speed}% Flags:0x{status_flags:02X}"
                 self.motor_debug_pub.publish(debug_msg)
                 
                 return True
@@ -253,8 +248,8 @@ class MotorControllerI2CNode(Node):
         linear_x = max(-self.max_linear_speed, min(self.max_linear_speed, linear_x))
         angular_z = max(-self.max_angular_speed, min(self.max_angular_speed, angular_z))
         
-        # Convert to car-style motor speeds (both same for front/rear)
-        front_speed, rear_speed = self.car_kinematics(linear_x, angular_z)
+        # Convert to car-style motor speeds (both same for rear/front)
+        rear_speed, front_speed = self.car_kinematics(linear_x, angular_z)
         
         # Convert angular velocity to servo angle (limited range around center)
         # angular_z: negative = turn left, positive = turn right
@@ -266,12 +261,12 @@ class MotorControllerI2CNode(Node):
                          min(self.servo_center + self.servo_range, servo_angle))
         
         # Send motor command to ESP32 with servo angle
-        success = self.send_motor_command(front_speed, rear_speed, servo_angle)
+        success = self.send_motor_command(rear_speed, front_speed, servo_angle)
         
         if success:
             self.cmd_received_count += 1
-            self.last_front = front_speed
             self.last_rear = rear_speed
+            self.last_front = front_speed
             self.last_servo = servo_angle
         else:
             self.get_logger().warn('Failed to send I2C motor command')
@@ -281,10 +276,10 @@ class MotorControllerI2CNode(Node):
         Convert linear and angular velocity to motor speeds for car-style steering.
         
         Car steering (Ackermann):
-        - Both motors (front & rear) run at SAME speed for forward/back
+        - Both motors (rear & front) run at SAME speed for forward/back
         - Servo handles steering direction
         
-        Returns: (front_speed, rear_speed) - both same value
+        Returns: (rear_speed, front_speed) - both same value
         """
         # Both motors run at same speed
         motor_speed = linear_x
@@ -295,18 +290,18 @@ class MotorControllerI2CNode(Node):
         # Clamp to -100 to +100
         speed_percent = max(-100, min(100, speed_percent))
         
-        # Return same speed for both front and rear motors
+        # Return same speed for both rear and front motors
         return speed_percent, speed_percent
 
-    def publish_motor_status(self, front_speed, rear_speed, status_flags):
+    def publish_motor_status(self, rear_speed, front_speed, status_flags):
         """Publish ESP32 motor status"""
         status_msg = UInt8MultiArray()
         
         # Convert signed speeds back to unsigned for publishing
-        front_byte = front_speed if front_speed >= 0 else 256 + front_speed
         rear_byte = rear_speed if rear_speed >= 0 else 256 + rear_speed
+        front_byte = front_speed if front_speed >= 0 else 256 + front_speed
         
-        status_msg.data = [front_byte, rear_byte, status_flags]
+        status_msg.data = [rear_byte, front_byte, status_flags]
         self.motor_status_pub.publish(status_msg)
 
     def emergency_stop(self):

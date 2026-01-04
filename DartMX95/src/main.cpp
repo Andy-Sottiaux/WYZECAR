@@ -11,8 +11,13 @@
     
   ESP32 I2C Address: 0x42
   
+  Motor Setup (Car-style Ackermann steering):
+    Motor A (ENA, IN1, IN2) = REAR motor (GPIO 25, 26, 27)
+    Motor B (ENB, IN3, IN4) = FRONT motor (GPIO 14, 12, 13)
+    Both motors run at same speed, servo handles steering
+  
   Commands (from DART-MX95):
-    0x01 [left] [right] [servo]  - Set motor speeds and servo
+    0x01 [rear] [front] [servo]  - Set motor speeds and servo
     0x02                          - Emergency stop
     0x03                          - Request status
 */
@@ -42,6 +47,7 @@
 #define SERVO_MIN_US 1300   // Minimum pulse width (full left)
 #define SERVO_MAX_US 1700   // Maximum pulse width (full right)
 #define SERVO_CENTER_US 1500 // Center pulse width
+#define SERVO_DEADBAND 5     // Degrees - ignore small changes to prevent buzzing
 
 // LED Pin
 #define LED_PIN 2
@@ -52,9 +58,10 @@
 #define CMD_REQUEST_STATUS 0x03
 
 // Motor control variables
-volatile int8_t leftSpeed = 0;
-volatile int8_t rightSpeed = 0;
+volatile int8_t rearSpeed = 0;   // Motor A (ENA/IN1/IN2)
+volatile int8_t frontSpeed = 0;  // Motor B (ENB/IN3/IN4)
 volatile uint8_t servoAngle = 90;
+volatile uint8_t currentServoAngle = 90;  // Actual servo position (for deadband)
 volatile bool emergencyStop = false;
 volatile bool newCommandReceived = false;
 volatile unsigned long lastI2CActivity = 0;
@@ -66,7 +73,7 @@ const unsigned long WATCHDOG_TIMEOUT_MS = 2000;
 Servo steeringServo;
 
 // Function declarations
-void setMotorSpeed(int8_t left, int8_t right);
+void setMotorSpeed(int8_t rear, int8_t front);
 void stopMotors();
 bool initI2CSlave();
 void processI2CData();
@@ -169,9 +176,9 @@ void loop() {
   
   // Status print every 5 seconds
   if (millis() - lastStatusPrint > 5000) {
-    Serial.printf("[%lus] I2C 0x%02X | L=%d R=%d S=%d | Last: %lums ago\n", 
+    Serial.printf("[%lus] I2C 0x%02X | Rear=%d Front=%d Servo=%d | Last: %lums ago\n", 
                   millis()/1000, I2C_SLAVE_ADDR,
-                  leftSpeed, rightSpeed, servoAngle,
+                  rearSpeed, frontSpeed, servoAngle,
                   lastI2CActivity > 0 ? millis() - lastI2CActivity : 0);
     lastStatusPrint = millis();
   }
@@ -199,18 +206,24 @@ void loop() {
     lastCommandTime = millis();
     
     if (!emergencyStop) {
-      setMotorSpeed(leftSpeed, rightSpeed);
-      steeringServo.write(servoAngle);
+      setMotorSpeed(rearSpeed, frontSpeed);
+      
+      // Apply servo deadband to prevent buzzing
+      // Only move servo if requested angle differs by more than deadband
+      if (abs((int)servoAngle - (int)currentServoAngle) >= SERVO_DEADBAND) {
+        currentServoAngle = servoAngle;
+        steeringServo.write(currentServoAngle);
+      }
     }
   }
   
   // Watchdog
   if (millis() - lastCommandTime > WATCHDOG_TIMEOUT_MS) {
-    if (!emergencyStop && (leftSpeed != 0 || rightSpeed != 0)) {
+    if (!emergencyStop && (rearSpeed != 0 || frontSpeed != 0)) {
       Serial.println("⚠️  Watchdog timeout");
       emergencyStop = true;
-      leftSpeed = 0;
-      rightSpeed = 0;
+      rearSpeed = 0;
+      frontSpeed = 0;
       stopMotors();
     }
   }
@@ -237,35 +250,35 @@ void processI2CData() {
     switch (command) {
       case CMD_SET_MOTORS:
         if (len >= 4) {
-          leftSpeed = constrain((int8_t)buffer[1], -100, 100);
-          rightSpeed = constrain((int8_t)buffer[2], -100, 100);
+          rearSpeed = constrain((int8_t)buffer[1], -100, 100);
+          frontSpeed = constrain((int8_t)buffer[2], -100, 100);
           servoAngle = constrain(buffer[3], 0, 180);
           emergencyStop = false;
           newCommandReceived = true;
-          Serial.printf("    Motors: L=%d R=%d S=%d\n", leftSpeed, rightSpeed, servoAngle);
+          Serial.printf("    Motors: Rear=%d Front=%d Servo=%d\n", rearSpeed, frontSpeed, servoAngle);
         }
         break;
         
       case CMD_EMERGENCY_STOP:
         emergencyStop = true;
-        leftSpeed = 0;
-        rightSpeed = 0;
+        rearSpeed = 0;
+        frontSpeed = 0;
         stopMotors();
         Serial.println("🛑 Emergency Stop!");
         break;
         
       case CMD_REQUEST_STATUS: {
         uint8_t response[3];
-        response[0] = (uint8_t)leftSpeed;
-        response[1] = (uint8_t)rightSpeed;
+        response[0] = (uint8_t)rearSpeed;
+        response[1] = (uint8_t)frontSpeed;
         uint8_t flags = 0;
-        if (leftSpeed != 0) flags |= 0x01;
-        if (rightSpeed != 0) flags |= 0x02;
+        if (rearSpeed != 0) flags |= 0x01;   // Rear motor enabled
+        if (frontSpeed != 0) flags |= 0x02;  // Front motor enabled
         if (emergencyStop) flags |= 0x04;
         response[2] = flags;
         
         i2c_slave_write_buffer(I2C_PORT, response, 3, 100 / portTICK_PERIOD_MS);
-        Serial.printf("📤 Status: L=%d R=%d F=0x%02X\n", leftSpeed, rightSpeed, flags);
+        Serial.printf("📤 Status: Rear=%d Front=%d Flags=0x%02X\n", rearSpeed, frontSpeed, flags);
         break;
       }
         
@@ -276,32 +289,32 @@ void processI2CData() {
   }
 }
 
-void setMotorSpeed(int8_t left, int8_t right) {
-  // Left motor
-  if (left > 0) {
+void setMotorSpeed(int8_t rear, int8_t front) {
+  // Rear motor (Motor A: ENA, IN1, IN2)
+  if (rear > 0) {
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
-  } else if (left < 0) {
+  } else if (rear < 0) {
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, HIGH);
   } else {
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, LOW);
   }
-  analogWrite(ENA, abs(left) * 255 / 100);
+  analogWrite(ENA, abs(rear) * 255 / 100);
   
-  // Right motor
-  if (right > 0) {
+  // Front motor (Motor B: ENB, IN3, IN4)
+  if (front > 0) {
     digitalWrite(IN3, HIGH);
     digitalWrite(IN4, LOW);
-  } else if (right < 0) {
+  } else if (front < 0) {
     digitalWrite(IN3, LOW);
     digitalWrite(IN4, HIGH);
   } else {
     digitalWrite(IN3, LOW);
     digitalWrite(IN4, LOW);
   }
-  analogWrite(ENB, abs(right) * 255 / 100);
+  analogWrite(ENB, abs(front) * 255 / 100);
 }
 
 void stopMotors() {

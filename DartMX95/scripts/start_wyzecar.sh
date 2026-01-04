@@ -110,14 +110,14 @@ case "${1:-all}" in
       echo "  ⚠ DETECTION DISABLED (passthrough mode)"
     fi
     $STDBUF_CMD ros2 run wyzecar_vision human_detector --ros-args \
-      -p process_every_n_frames:=3 \
-      -p input_size:=320 \
-      -p confidence_threshold:=0.5 \
+      -p process_every_n_frames:=2 \
+      -p input_size:=416 \
+      -p confidence_threshold:=0.45 \
       $DETECT_DISABLE_FLAG \
       >> "$DETLOG" 2>&1 &
     DET_PID=$!
     if [ -z "$DETECT_DISABLE_FLAG" ]; then
-      echo "  ✓ Human detector (YOLOv8)"
+      echo "  ✓ Human detector (YOLOv8 @ 416px)"
     fi
     sleep 5
     if ! kill -0 "$DET_PID" 2>/dev/null; then

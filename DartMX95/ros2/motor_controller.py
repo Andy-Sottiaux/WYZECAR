@@ -39,13 +39,13 @@ class SmoothMotorController(Node):
         # ROS2 Parameters
         self.declare_parameter('i2c_bus', 3)
         self.declare_parameter('esp32_address', 0x42)
-        self.declare_parameter('max_speed_percent', 40)  # Lower max speed for safety
-        self.declare_parameter('acceleration_rate', 15.0)  # % per second (gentle acceleration)
-        self.declare_parameter('deceleration_rate', 25.0)  # % per second (slightly faster braking)
-        self.declare_parameter('servo_slew_rate', 45.0)  # degrees per second
-        self.declare_parameter('command_timeout', 3.0)
-        self.declare_parameter('control_rate', 20.0)  # Hz - smooth control loop rate
-        self.declare_parameter('velocity_smoothing', 0.3)  # Exponential smoothing factor
+        self.declare_parameter('max_speed_percent', 60)  # Good tracking speed
+        self.declare_parameter('acceleration_rate', 25.0)  # % per second (responsive but smooth)
+        self.declare_parameter('deceleration_rate', 35.0)  # % per second (safe braking)
+        self.declare_parameter('servo_slew_rate', 60.0)  # degrees per second (responsive steering)
+        self.declare_parameter('command_timeout', 2.0)
+        self.declare_parameter('control_rate', 25.0)  # Hz - higher rate for smoother motion
+        self.declare_parameter('velocity_smoothing', 0.4)  # Slightly more responsive
         
         # Get parameters
         self.i2c_bus = self.get_parameter('i2c_bus').get_parameter_value().integer_value

@@ -34,12 +34,12 @@ class HumanDetectorNode(Node):
     def __init__(self):
         super().__init__('human_detector')
         
-        # Parameters
+        # Parameters - tuned for better tracking performance
         self.declare_parameter('model', 'yolov8n.pt')
-        self.declare_parameter('confidence_threshold', 0.5)
-        self.declare_parameter('min_box_area', 2000)
-        self.declare_parameter('input_size', 320)
-        self.declare_parameter('process_every_n_frames', 3)
+        self.declare_parameter('confidence_threshold', 0.45)  # Slightly lower for better detection
+        self.declare_parameter('min_box_area', 1500)  # Detect people further away
+        self.declare_parameter('input_size', 416)  # Higher resolution for better accuracy
+        self.declare_parameter('process_every_n_frames', 2)  # Process more frames
         self.declare_parameter('disable_detection', False)
         
         self.model_name = self.get_parameter('model').get_parameter_value().string_value

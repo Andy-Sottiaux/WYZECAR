@@ -41,17 +41,22 @@ case "${1:-all}" in
     echo "Starting nodes..."
     
     # Start nodes - all output to log file
+    # Camera at 320x240 for faster processing
     ros2 run v4l2_camera v4l2_camera_node --ros-args \
       -p video_device:=/dev/video13 \
-      -p image_size:=[640,480] \
+      -p image_size:=[320,240] \
+      -p pixel_format:=MJPG \
       >> "$LOGFILE" 2>&1 &
-    echo "  ✓ Camera node"
+    echo "  ✓ Camera node (320x240 MJPEG)"
     sleep 2
     
-    ros2 run wyzecar_vision human_detector \
+    # Human detector with frame skipping for speed
+    ros2 run wyzecar_vision human_detector --ros-args \
+      -p process_every_n_frames:=2 \
+      -p input_size:=320 \
       >> "$LOGFILE" 2>&1 &
-    echo "  ✓ Human detector (YOLO)"
-    sleep 2
+    echo "  ✓ Human detector (YOLO @ 320px, skip 2)"
+    sleep 3
     
     ros2 run wyzecar_vision follower \
       >> "$LOGFILE" 2>&1 &

@@ -58,6 +58,7 @@ class MotorControllerI2CNode(Node):
         self.declare_parameter('command_timeout', 2.0)  # seconds
         self.declare_parameter('servo_center', 90)  # Center position (1500µs)
         self.declare_parameter('servo_range', 90)   # Full range: 0-180° maps to 1300-1700µs
+        self.declare_parameter('servo_deadband', 5) # Degrees - ignore small changes to prevent buzzing
         
         # Get parameters
         self.i2c_bus = self.get_parameter('i2c_bus').get_parameter_value().integer_value
@@ -68,6 +69,7 @@ class MotorControllerI2CNode(Node):
         self.command_timeout = self.get_parameter('command_timeout').get_parameter_value().double_value
         self.servo_center = self.get_parameter('servo_center').get_parameter_value().integer_value
         self.servo_range = self.get_parameter('servo_range').get_parameter_value().integer_value
+        self.servo_deadband = self.get_parameter('servo_deadband').get_parameter_value().integer_value
         
         # ROS2 Subscribers and Publishers
         self.cmd_vel_sub = self.create_subscription(
@@ -106,7 +108,7 @@ class MotorControllerI2CNode(Node):
         self.start_background_threads()
         
         self.get_logger().info(f'Motor Controller I2C Node started on bus {self.i2c_bus}, address 0x{self.esp32_address:02X}')
-        self.get_logger().info(f'Servo: {self.servo_center}° center, ±{self.servo_range}° range (ESP32 limits to 1300-1700µs)')
+        self.get_logger().info(f'Servo: {self.servo_center}° center, ±{self.servo_range}° range, {self.servo_deadband}° deadband')
         
         # Status tracking
         self.cmd_received_count = 0
@@ -152,6 +154,11 @@ class MotorControllerI2CNode(Node):
             
         if servo_angle is None:
             servo_angle = self.current_servo_angle
+        
+        # Apply servo deadband to prevent buzzing
+        # Only update servo if change exceeds deadband threshold
+        if abs(servo_angle - self.current_servo_angle) < self.servo_deadband:
+            servo_angle = self.current_servo_angle  # Keep previous position
         else:
             self.current_servo_angle = servo_angle
             

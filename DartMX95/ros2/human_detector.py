@@ -47,12 +47,16 @@ class HumanDetectorNode(Node):
         self.declare_parameter('target_class', 0)  # 0 = person in COCO
         self.declare_parameter('min_box_area', 5000)  # Minimum detection size
         self.declare_parameter('publish_debug_image', True)
+        self.declare_parameter('process_every_n_frames', 3)  # Skip frames for speed
+        self.declare_parameter('input_size', 320)  # Resize input for faster inference
         
         self.model_name = self.get_parameter('model').get_parameter_value().string_value
         self.conf_threshold = self.get_parameter('confidence_threshold').get_parameter_value().double_value
         self.target_class = self.get_parameter('target_class').get_parameter_value().integer_value
         self.min_box_area = self.get_parameter('min_box_area').get_parameter_value().integer_value
         self.publish_debug = self.get_parameter('publish_debug_image').get_parameter_value().bool_value
+        self.skip_frames = self.get_parameter('process_every_n_frames').get_parameter_value().integer_value
+        self.input_size = self.get_parameter('input_size').get_parameter_value().integer_value
         
         # Load YOLO model
         self.get_logger().info(f'Loading YOLO model: {self.model_name}')
@@ -95,9 +99,9 @@ class HumanDetectorNode(Node):
         self.frame_count = 0
         
         self.get_logger().info('Human Detector Node started')
-        self.get_logger().info(f'  Model: {self.model_name}')
-        self.get_logger().info(f'  Confidence threshold: {self.conf_threshold}')
-        self.get_logger().info(f'  Min box area: {self.min_box_area}')
+        self.get_logger().info(f'  Model: {self.model_name} @ {self.input_size}px')
+        self.get_logger().info(f'  Process every {self.skip_frames} frames')
+        self.get_logger().info(f'  Confidence: {self.conf_threshold}, Min area: {self.min_box_area}')
         
         # Status logging timer (every 2 seconds)
         self.detection_count = 0
@@ -117,6 +121,10 @@ class HumanDetectorNode(Node):
         """Process incoming camera frame"""
         self.frame_count += 1
         
+        # Skip frames for better performance (process every Nth frame)
+        if self.frame_count % self.skip_frames != 0:
+            return
+        
         # Convert ROS Image to OpenCV
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -126,8 +134,8 @@ class HumanDetectorNode(Node):
         
         height, width = cv_image.shape[:2]
         
-        # Run YOLO detection
-        results = self.model(cv_image, verbose=False, conf=self.conf_threshold)
+        # Run YOLO detection with smaller input size for speed
+        results = self.model(cv_image, verbose=False, conf=self.conf_threshold, imgsz=self.input_size)
         
         # Process detections
         detections = []

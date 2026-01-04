@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """
-Advanced Follower Node for WYZECAR
+Industry-Standard Human Following Controller for WYZECAR
 
-Features:
-- Target position smoothing (filters jitter)
-- Velocity estimation (anticipates movement)
-- Search behavior (rotates when target lost)
-- Adaptive speed (slows when turning sharply)
-- Priority on keeping target in frame
+Based on visual servoing principles used in commercial following robots:
+- Area-based distance estimation (robust to pose changes)
+- Velocity matching (follows speed, not just position)  
+- Exponential smoothing for jitter reduction
+- Speed-coupled steering (safer turns)
+- Proper state machine with hysteresis
 
 Topics:
-    Subscribed:
-        /target_person (geometry_msgs/PointStamped): Target position
-    Published:
-        /cmd_vel (geometry_msgs/Twist): Velocity commands
+    Subscribed: /target_person (PointStamped)
+    Published: /cmd_vel (Twist)
 """
 
 import rclpy
@@ -23,156 +21,150 @@ import time
 import math
 
 
-class TargetTracker:
-    """Smooths target position and estimates velocity"""
+class TargetState:
+    """
+    Maintains smoothed target state with velocity estimation.
+    Uses exponential moving average (EMA) for noise rejection.
+    """
     
-    def __init__(self, smoothing=0.3):
-        self.smoothing = smoothing  # 0-1, lower = more smoothing
-        self.x = 0.0
-        self.y = 0.0
-        self.distance = 0.5
-        self.vx = 0.0  # Velocity in x
+    def __init__(self, position_alpha=0.4, velocity_alpha=0.3):
+        self.position_alpha = position_alpha  # Higher = more responsive
+        self.velocity_alpha = velocity_alpha
+        
+        # Position state
+        self.x = 0.0           # Horizontal position (-1 to 1)
+        self.distance = 0.5   # Normalized distance (0=close, 1=far)
+        
+        # Velocity state
+        self.vx = 0.0         # Horizontal velocity
+        self.vd = 0.0         # Distance velocity (approach rate)
+        
+        # Timing
         self.last_update = 0.0
         self.valid = False
+        self.update_count = 0
     
-    def update(self, x, y, distance):
+    def update(self, x: float, distance: float) -> None:
+        """Update state with new measurement"""
         now = time.time()
         dt = now - self.last_update if self.last_update > 0 else 0.05
+        dt = max(0.01, min(0.5, dt))  # Clamp dt
         
-        if self.valid and dt > 0:
-            # Estimate velocity
-            new_vx = (x - self.x) / dt
-            self.vx = self.vx * 0.7 + new_vx * 0.3  # Smooth velocity
-        
-        # Exponential smoothing
         if self.valid:
-            self.x = self.x * (1 - self.smoothing) + x * self.smoothing
-            self.y = self.y * (1 - self.smoothing) + y * self.smoothing
-            self.distance = self.distance * (1 - self.smoothing) + distance * self.smoothing
+            # Estimate velocities
+            raw_vx = (x - self.x) / dt
+            raw_vd = (distance - self.distance) / dt
+            
+            # Smooth velocities
+            self.vx = self.vx * (1 - self.velocity_alpha) + raw_vx * self.velocity_alpha
+            self.vd = self.vd * (1 - self.velocity_alpha) + raw_vd * self.velocity_alpha
+            
+            # Smooth positions
+            self.x = self.x * (1 - self.position_alpha) + x * self.position_alpha
+            self.distance = self.distance * (1 - self.position_alpha) + distance * self.position_alpha
         else:
+            # First update - initialize directly
             self.x = x
-            self.y = y
             self.distance = distance
+            self.vx = 0.0
+            self.vd = 0.0
         
         self.last_update = now
         self.valid = True
+        self.update_count += 1
     
-    def predict(self, dt=0.1):
-        """Predict future position"""
-        return self.x + self.vx * dt
+    def predict(self, dt: float) -> tuple:
+        """Predict future position for lead compensation"""
+        pred_x = self.x + self.vx * dt
+        pred_d = self.distance + self.vd * dt
+        return pred_x, max(0, min(1, pred_d))
     
-    def age(self):
+    def age(self) -> float:
         """Time since last update"""
-        return time.time() - self.last_update if self.last_update > 0 else 999
+        if self.last_update <= 0:
+            return float('inf')
+        return time.time() - self.last_update
     
-    def reset(self):
+    def reset(self) -> None:
+        """Reset state when target lost"""
         self.valid = False
         self.vx = 0.0
+        self.vd = 0.0
+        self.update_count = 0
 
 
-class PIDController:
-    """PID controller with anti-windup"""
+class FollowerController(Node):
+    """
+    Visual servoing controller for human following.
     
-    def __init__(self, kp=1.0, ki=0.0, kd=0.1, max_integral=0.5):
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-        self.max_integral = max_integral
-        self.integral = 0.0
-        self.last_error = 0.0
-        self.last_time = time.time()
+    Control Strategy:
+    1. Angular: Proportional control on horizontal error with velocity feedforward
+    2. Linear: Proportional control on distance error with velocity matching
+    3. Coupling: Reduce linear speed when turning (prevents overshooting)
+    """
     
-    def compute(self, error, dt=None):
-        now = time.time()
-        if dt is None:
-            dt = now - self.last_time
-        if dt <= 0:
-            dt = 0.01
-        
-        # Proportional
-        p = self.kp * error
-        
-        # Integral with anti-windup
-        self.integral += error * dt
-        self.integral = max(-self.max_integral, min(self.max_integral, self.integral))
-        i = self.ki * self.integral
-        
-        # Derivative (with filtering)
-        derivative = (error - self.last_error) / dt
-        d = self.kd * derivative
-        
-        self.last_error = error
-        self.last_time = now
-        
-        return p + i + d
-    
-    def reset(self):
-        self.integral = 0.0
-        self.last_error = 0.0
-        self.last_time = time.time()
-
-
-class FollowerNode(Node):
     # States
-    STATE_IDLE = 0
-    STATE_TRACKING = 1
-    STATE_SEARCHING = 2
+    IDLE = 0
+    TRACKING = 1
+    SEARCHING = 2
+    STOPPED = 3  # Close enough, just track orientation
+    
+    STATE_NAMES = ['IDLE', 'TRACKING', 'SEARCHING', 'STOPPED']
     
     def __init__(self):
         super().__init__('follower')
         
-        # Core parameters (distance: 0=far, 1=close based on bounding box size)
-        self.declare_parameter('target_distance', 0.6)  # Try to maintain this closeness
-        self.declare_parameter('stop_distance', 0.85)  # Stop when this close (high = very close)
+        # === Distance Parameters ===
+        # distance: 0 = very close (large bbox), 1 = far (small bbox)
+        self.declare_parameter('stop_distance', 0.15)      # Stop forward motion
+        self.declare_parameter('target_distance', 0.35)    # Ideal following distance
+        self.declare_parameter('max_distance', 0.85)       # Beyond this, full speed
+        
+        # === Speed Limits ===
         self.declare_parameter('max_linear_speed', 0.55)
         self.declare_parameter('max_angular_speed', 1.0)
-        self.declare_parameter('lost_timeout', 1.5)
-        self.declare_parameter('search_timeout', 8.0)
+        self.declare_parameter('min_linear_speed', 0.1)    # Minimum to overcome friction
         
-        # Tuning
-        self.declare_parameter('centering_priority', 0.7)  # How much to prioritize centering vs distance
-        self.declare_parameter('turn_slowdown', 0.6)  # Slow forward speed when turning hard
-        self.declare_parameter('prediction_time', 0.15)  # How far ahead to predict
+        # === Control Gains ===
+        self.declare_parameter('angular_gain', 1.5)        # Horizontal error gain
+        self.declare_parameter('angular_velocity_gain', 0.3)  # Velocity feedforward
+        self.declare_parameter('linear_gain', 0.8)         # Distance error gain
+        self.declare_parameter('linear_velocity_gain', 0.4)   # Velocity matching
         
-        # PID gains
-        self.declare_parameter('angular_kp', 1.2)
-        self.declare_parameter('angular_ki', 0.05)
-        self.declare_parameter('angular_kd', 0.2)
-        self.declare_parameter('linear_kp', 0.6)
-        self.declare_parameter('linear_ki', 0.03)
-        self.declare_parameter('linear_kd', 0.15)
+        # === Behavior Tuning ===
+        self.declare_parameter('turn_speed_coupling', 0.5) # How much turning slows forward
+        self.declare_parameter('center_deadzone', 0.08)    # Ignore small horizontal errors
+        self.declare_parameter('distance_deadzone', 0.05)  # Ignore small distance errors
+        self.declare_parameter('prediction_time', 0.1)     # Lookahead for lead compensation
         
-        # Load parameters
-        self.target_distance = self.get_parameter('target_distance').get_parameter_value().double_value
-        self.stop_distance = self.get_parameter('stop_distance').get_parameter_value().double_value
-        self.max_linear = self.get_parameter('max_linear_speed').get_parameter_value().double_value
-        self.max_angular = self.get_parameter('max_angular_speed').get_parameter_value().double_value
-        self.lost_timeout = self.get_parameter('lost_timeout').get_parameter_value().double_value
-        self.search_timeout = self.get_parameter('search_timeout').get_parameter_value().double_value
-        self.centering_priority = self.get_parameter('centering_priority').get_parameter_value().double_value
-        self.turn_slowdown = self.get_parameter('turn_slowdown').get_parameter_value().double_value
-        self.prediction_time = self.get_parameter('prediction_time').get_parameter_value().double_value
+        # === Timeouts ===
+        self.declare_parameter('lost_timeout', 1.2)        # Start searching
+        self.declare_parameter('search_timeout', 6.0)      # Give up searching
         
-        # Initialize controllers
-        self.angular_pid = PIDController(
-            self.get_parameter('angular_kp').get_parameter_value().double_value,
-            self.get_parameter('angular_ki').get_parameter_value().double_value,
-            self.get_parameter('angular_kd').get_parameter_value().double_value
-        )
-        self.linear_pid = PIDController(
-            self.get_parameter('linear_kp').get_parameter_value().double_value,
-            self.get_parameter('linear_ki').get_parameter_value().double_value,
-            self.get_parameter('linear_kd').get_parameter_value().double_value
-        )
+        # Load all parameters
+        self.stop_dist = self.get_parameter('stop_distance').value
+        self.target_dist = self.get_parameter('target_distance').value
+        self.max_dist = self.get_parameter('max_distance').value
+        self.max_linear = self.get_parameter('max_linear_speed').value
+        self.max_angular = self.get_parameter('max_angular_speed').value
+        self.min_linear = self.get_parameter('min_linear_speed').value
+        self.angular_gain = self.get_parameter('angular_gain').value
+        self.angular_vel_gain = self.get_parameter('angular_velocity_gain').value
+        self.linear_gain = self.get_parameter('linear_gain').value
+        self.linear_vel_gain = self.get_parameter('linear_velocity_gain').value
+        self.turn_coupling = self.get_parameter('turn_speed_coupling').value
+        self.center_deadzone = self.get_parameter('center_deadzone').value
+        self.dist_deadzone = self.get_parameter('distance_deadzone').value
+        self.pred_time = self.get_parameter('prediction_time').value
+        self.lost_timeout = self.get_parameter('lost_timeout').value
+        self.search_timeout = self.get_parameter('search_timeout').value
         
-        # Target tracker with smoothing
-        self.tracker = TargetTracker(smoothing=0.4)
-        
-        # State machine
-        self.state = self.STATE_IDLE
-        self.search_start_time = 0.0
-        self.search_direction = 1  # 1 = right, -1 = left
-        self.last_known_direction = 0  # Where target was last seen
+        # State
+        self.target = TargetState()
+        self.state = self.IDLE
+        self.search_direction = 1
+        self.search_start = 0.0
+        self.last_x_direction = 0  # Remember which way target went
         
         # ROS interfaces
         self.target_sub = self.create_subscription(
@@ -184,129 +176,167 @@ class FollowerNode(Node):
         self.create_timer(2.0, self.log_status)
         
         self.cmd_count = 0
-        self.get_logger().info('Advanced Follower started')
-        self.get_logger().info(f'  Target distance: {self.target_distance}')
-        self.get_logger().info(f'  Stop distance: {self.stop_distance}')
-        self.get_logger().info(f'  Max speeds: linear={self.max_linear}, angular={self.max_angular}')
+        
+        self.get_logger().info('=== Human Following Controller ===')
+        self.get_logger().info(f'Distance: stop={self.stop_dist:.2f}, target={self.target_dist:.2f}, max={self.max_dist:.2f}')
+        self.get_logger().info(f'Speed: linear={self.max_linear:.2f}, angular={self.max_angular:.2f}')
+        self.get_logger().info(f'Gains: angular={self.angular_gain:.2f}, linear={self.linear_gain:.2f}')
     
     def log_status(self):
-        state_names = ['IDLE', 'TRACKING', 'SEARCHING']
-        if self.tracker.valid:
+        if self.target.valid:
             self.get_logger().info(
-                f'[FOLLOWER] {state_names[self.state]} | '
-                f'x={self.tracker.x:.2f} vx={self.tracker.vx:.2f} dist={self.tracker.distance:.2f} | '
+                f'[{self.STATE_NAMES[self.state]}] '
+                f'x={self.target.x:+.2f} vx={self.target.vx:+.2f} | '
+                f'd={self.target.distance:.2f} vd={self.target.vd:+.2f} | '
                 f'cmds={self.cmd_count}'
             )
         else:
-            self.get_logger().info(f'[FOLLOWER] {state_names[self.state]} | No target | cmds={self.cmd_count}')
+            self.get_logger().info(f'[{self.STATE_NAMES[self.state]}] No target | cmds={self.cmd_count}')
         self.cmd_count = 0
     
-    def target_callback(self, msg):
-        """Update tracker with new detection"""
-        self.tracker.update(msg.point.x, msg.point.y, msg.point.z)
+    def target_callback(self, msg: PointStamped):
+        """Process new target detection"""
+        self.target.update(msg.point.x, msg.point.z)
         
-        # Remember which direction target was last seen
-        if abs(msg.point.x) > 0.1:
-            self.last_known_direction = 1 if msg.point.x > 0 else -1
+        # Remember direction for search behavior
+        if abs(msg.point.x) > 0.15:
+            self.last_x_direction = 1 if msg.point.x > 0 else -1
     
     def control_loop(self):
-        """Main control loop"""
+        """Main control loop - runs at 25 Hz"""
         cmd = Twist()
-        target_age = self.tracker.age()
+        age = self.target.age()
         
-        # State transitions
-        if target_age < self.lost_timeout:
-            self.state = self.STATE_TRACKING
-        elif target_age < self.search_timeout:
-            if self.state != self.STATE_SEARCHING:
-                self.state = self.STATE_SEARCHING
-                self.search_start_time = time.time()
-                # Search in direction target was last seen
-                self.search_direction = self.last_known_direction if self.last_known_direction != 0 else 1
-                self.get_logger().info(f'Target lost, searching {"right" if self.search_direction > 0 else "left"}...')
+        # === State Machine ===
+        if age < self.lost_timeout and self.target.valid:
+            # Have target - check if stopped or tracking
+            if self.target.distance <= self.stop_dist:
+                self._transition_to(self.STOPPED)
+            else:
+                self._transition_to(self.TRACKING)
+        elif age < self.search_timeout:
+            self._transition_to(self.SEARCHING)
         else:
-            if self.state != self.STATE_IDLE:
-                self.state = self.STATE_IDLE
-                self.get_logger().warn('Search timeout, going idle')
-                self.tracker.reset()
-                self.angular_pid.reset()
-                self.linear_pid.reset()
+            self._transition_to(self.IDLE)
         
-        # Execute state behavior
-        if self.state == self.STATE_TRACKING:
-            cmd = self._tracking_behavior()
-        elif self.state == self.STATE_SEARCHING:
-            cmd = self._searching_behavior()
-        # IDLE = stop (cmd is already zero)
+        # === Execute Behavior ===
+        if self.state == self.TRACKING:
+            cmd = self._compute_tracking_command()
+        elif self.state == self.STOPPED:
+            cmd = self._compute_stopped_command()
+        elif self.state == self.SEARCHING:
+            cmd = self._compute_search_command()
+        # IDLE: cmd stays zero
         
         self.cmd_count += 1
         self.cmd_pub.publish(cmd)
     
-    def _tracking_behavior(self):
-        """Active tracking - keep target centered and at distance"""
+    def _transition_to(self, new_state: int):
+        """Handle state transitions with logging"""
+        if new_state != self.state:
+            self.get_logger().info(f'State: {self.STATE_NAMES[self.state]} → {self.STATE_NAMES[new_state]}')
+            
+            if new_state == self.SEARCHING:
+                self.search_start = time.time()
+                self.search_direction = self.last_x_direction if self.last_x_direction != 0 else 1
+            elif new_state == self.IDLE:
+                self.target.reset()
+            
+            self.state = new_state
+    
+    def _compute_tracking_command(self) -> Twist:
+        """
+        Compute velocity command for active tracking.
+        Uses visual servoing with velocity feedforward.
+        """
         cmd = Twist()
         
-        # Use predicted position for smoother tracking
-        predicted_x = self.tracker.predict(self.prediction_time)
+        # Get predicted position for lead compensation
+        pred_x, pred_d = self.target.predict(self.pred_time)
         
-        # Angular control - keep target centered (PRIORITY)
-        # Negative because positive x = right, we turn right (negative angular)
-        angular_error = -predicted_x
-        angular_cmd = self.angular_pid.compute(angular_error)
+        # === Angular Control ===
+        # Error: negative x = target on left, we should turn left (positive angular)
+        x_error = -pred_x
         
-        # Check if we're close enough to stop (higher distance value = closer)
-        if self.tracker.distance >= self.stop_distance:
-            # Close enough - stop forward motion, but still allow steering
-            cmd.linear.x = 0.0
-            cmd.angular.z = float(max(-self.max_angular, min(self.max_angular, angular_cmd)))
-            return cmd
+        # Apply deadzone
+        if abs(x_error) < self.center_deadzone:
+            x_error = 0.0
         
-        # Linear control - maintain distance
-        # Positive error = too far (low distance value), need to move forward
-        # Negative error = too close (high distance value), need to back up
-        distance_error = self.target_distance - self.tracker.distance
-        linear_cmd = self.linear_pid.compute(distance_error)
+        # Proportional + velocity feedforward
+        angular_cmd = (self.angular_gain * x_error + 
+                      self.angular_vel_gain * (-self.target.vx))
         
-        # Adaptive speed - slow down when turning hard (keeps target in frame)
-        turn_factor = 1.0 - abs(angular_cmd / self.max_angular) * (1.0 - self.turn_slowdown)
+        # === Linear Control ===
+        # Error: positive when target is far (need to move forward)
+        d_error = self.target.distance - self.target_dist
+        
+        # Apply deadzone
+        if abs(d_error) < self.dist_deadzone:
+            d_error = 0.0
+        
+        # Proportional + velocity matching
+        # If target moving away (positive vd), speed up
+        linear_cmd = (self.linear_gain * d_error + 
+                     self.linear_vel_gain * self.target.vd)
+        
+        # === Speed Coupling ===
+        # Reduce forward speed when turning to prevent overshooting
+        turn_factor = 1.0 - self.turn_coupling * abs(angular_cmd / self.max_angular)
+        turn_factor = max(0.3, turn_factor)  # Never reduce below 30%
         linear_cmd *= turn_factor
         
-        # Prioritize centering over forward motion
-        # If target is off-center, reduce forward speed
-        off_center = abs(self.tracker.x)
-        if off_center > 0.3:
-            center_factor = 1.0 - (off_center - 0.3) * self.centering_priority
-            linear_cmd *= max(0.2, center_factor)
+        # === Centering Priority ===
+        # If target is off-center, slow down to center first
+        if abs(self.target.x) > 0.4:
+            center_urgency = (abs(self.target.x) - 0.4) / 0.6
+            linear_cmd *= (1.0 - 0.7 * center_urgency)
         
-        # Clamp
+        # === Clamp Outputs ===
+        # Ensure minimum speed if we need to move (overcome static friction)
+        if abs(linear_cmd) > 0.01 and abs(linear_cmd) < self.min_linear:
+            linear_cmd = self.min_linear * (1 if linear_cmd > 0 else -1)
+        
         cmd.linear.x = float(max(-self.max_linear, min(self.max_linear, linear_cmd)))
         cmd.angular.z = float(max(-self.max_angular, min(self.max_angular, angular_cmd)))
         
         return cmd
     
-    def _searching_behavior(self):
-        """Search for lost target by rotating"""
+    def _compute_stopped_command(self) -> Twist:
+        """
+        Close to target - stop forward motion, just maintain centering.
+        """
         cmd = Twist()
         
-        # Rotate in direction target was last seen
-        search_speed = 0.4  # Slower rotation for search
-        cmd.angular.z = float(self.search_direction * search_speed)
+        # Still track horizontally
+        x_error = -self.target.x
+        if abs(x_error) > self.center_deadzone:
+            angular_cmd = self.angular_gain * 0.5 * x_error  # Gentler when stopped
+            cmd.angular.z = float(max(-self.max_angular * 0.5, min(self.max_angular * 0.5, angular_cmd)))
         
-        # Alternate direction periodically
-        search_duration = time.time() - self.search_start_time
-        if search_duration > 3.0:
-            # Flip direction every 3 seconds
-            cycles = int(search_duration / 3.0)
-            if cycles % 2 == 1:
-                cmd.angular.z = -cmd.angular.z
+        return cmd
+    
+    def _compute_search_command(self) -> Twist:
+        """
+        Target lost - rotate to search in last known direction.
+        """
+        cmd = Twist()
         
+        search_time = time.time() - self.search_start
+        search_speed = 0.35  # Gentle rotation
+        
+        # Rotate in last known direction, flip every 2.5 seconds
+        direction = self.search_direction
+        if int(search_time / 2.5) % 2 == 1:
+            direction = -direction
+        
+        cmd.angular.z = float(direction * search_speed)
         return cmd
 
 
 def main(args=None):
     rclpy.init(args=args)
     try:
-        node = FollowerNode()
+        node = FollowerController()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass

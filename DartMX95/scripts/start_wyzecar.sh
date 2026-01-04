@@ -19,6 +19,11 @@ mkdir -p "$YOLO_CONFIG_DIR" 2>/dev/null || true
 # Ensure Python flushes logs promptly when redirected
 export PYTHONUNBUFFERED=1
 
+# Make ROS2 logs show up in stdout/stderr (so our per-node *.log captures them)
+export RCUTILS_LOGGING_USE_STDOUT=1
+export RCUTILS_COLORIZED_OUTPUT=0
+export RCUTILS_LOGGING_BUFFERED_STREAM=0
+
 # Line-buffered output so logs flush immediately
 export STDBUF_CMD="stdbuf -oL -eL"
 if ! command -v stdbuf >/dev/null 2>&1; then
@@ -76,6 +81,7 @@ case "${1:-all}" in
     echo "  follower: $FOLLOG" >> "$LOGFILE"
     echo "  motor:    $MOTLOG" >> "$LOGFILE"
     echo "  web:      $WEBLOG" >> "$LOGFILE"
+    echo "  ros2:     $RUNLOGDIR/ros2 (ROS internal logs)" >> "$LOGFILE"
     echo "" >> "$LOGFILE"
 
     # If anything errors out, capture context in run.log

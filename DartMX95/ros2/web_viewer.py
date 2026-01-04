@@ -90,11 +90,13 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                             cv2.putText(frame, "Waiting for camera...", (150, 240),
                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                     
-                    _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    # Lower quality and add sleep to reduce CPU load
+                    _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
                     self.wfile.write(b'--frame\r\n')
                     self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
                     self.wfile.write(jpeg.tobytes())
                     self.wfile.write(b'\r\n')
+                    time.sleep(0.1)  # 10 FPS max to reduce load
                 except:
                     break
 

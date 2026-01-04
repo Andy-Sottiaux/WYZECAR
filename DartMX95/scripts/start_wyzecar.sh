@@ -49,13 +49,14 @@ case "${1:-all}" in
     echo "  ✓ Camera node (320x240)"
     sleep 2
     
-    # Human detector with frame skipping for speed
+    # Human detector with aggressive frame skipping for ARM CPU
     ros2 run wyzecar_vision human_detector --ros-args \
-      -p process_every_n_frames:=2 \
-      -p input_size:=320 \
+      -p process_every_n_frames:=5 \
+      -p input_size:=256 \
+      -p confidence_threshold:=0.4 \
       >> "$LOGFILE" 2>&1 &
-    echo "  ✓ Human detector (YOLO @ 320px, skip 2)"
-    sleep 3
+    echo "  ✓ Human detector (YOLO @ 256px, skip 5)"
+    sleep 5
     
     ros2 run wyzecar_vision follower \
       >> "$LOGFILE" 2>&1 &

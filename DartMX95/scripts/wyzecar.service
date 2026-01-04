@@ -1,0 +1,21 @@
+[Unit]
+Description=WYZECAR (Docker) - Vision-based following system
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/WYZECAR
+Environment=IMAGE=wyzecar:humble
+Environment=I2C_DEVICE=/dev/i2c-3
+Environment=VIDEO_DEVICE=/dev/video13
+ExecStart=/bin/bash /root/WYZECAR/DartMX95/scripts/start_wyzecar_host.sh
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+
+

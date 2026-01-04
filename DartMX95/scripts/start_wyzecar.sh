@@ -41,13 +41,12 @@ case "${1:-all}" in
     echo "Starting nodes..."
     
     # Start nodes - all output to log file
-    # Camera at 320x240 for faster processing
+    # Camera at 320x240 UYVY (MJPG not supported by v4l2_camera)
     ros2 run v4l2_camera v4l2_camera_node --ros-args \
       -p video_device:=/dev/video13 \
       -p image_size:=[320,240] \
-      -p pixel_format:=MJPG \
       >> "$LOGFILE" 2>&1 &
-    echo "  ✓ Camera node (320x240 MJPEG)"
+    echo "  ✓ Camera node (320x240)"
     sleep 2
     
     # Human detector with frame skipping for speed

@@ -42,11 +42,12 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o 
     rm -rf /var/lib/apt/lists/*
 
 # Python packages for YOLO and I2C
+# Pin numpy<2 and opencv<4.10 for cv_bridge compatibility
 RUN pip3 install --no-cache-dir \
+    "numpy==1.24.4" \
+    "opencv-python-headless==4.8.1.78" \
     ultralytics \
-    opencv-python-headless \
-    smbus2 \
-    numpy
+    smbus2
 
 # Initialize rosdep database (ignore if already initialized)
 RUN rosdep init 2>/dev/null || true

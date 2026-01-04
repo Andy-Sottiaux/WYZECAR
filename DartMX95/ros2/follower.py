@@ -121,7 +121,7 @@ class FollowerController(Node):
         self.declare_parameter('max_distance', 0.85)       # Beyond this, full speed
         
         # === Speed Limits ===
-        self.declare_parameter('max_linear_speed', 0.7)
+        self.declare_parameter('max_linear_speed', 0.55)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('min_linear_speed', 0.25)   # Higher minimum to overcome friction
         

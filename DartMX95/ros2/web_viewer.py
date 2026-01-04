@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Enhanced Web Viewer for WYZECAR
+Advanced Web Dashboard for WYZECAR
 
-Features:
-- Live video stream with YOLO detections
-- Real-time status panel (target, motors, FPS)
-- Auto-refreshing telemetry via JSON API
+Real-time telemetry display:
+- Target position & velocity
+- Motor commands with visual bars
+- Controller state machine
+- System performance metrics
 
 Access at: http://<DART-IP>:8080
 """
@@ -14,6 +15,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist, PointStamped
+from std_msgs.msg import String
 from cv_bridge import CvBridge
 import cv2
 import threading
@@ -22,18 +24,27 @@ import numpy as np
 import time
 import json
 
-# Global state
+# Global state with velocity tracking
 state_lock = threading.Lock()
 state = {
     'frame': None,
     'frame_ts': 0.0,
     'frame_source': 'none',
-    'target': None,  # {'x': float, 'y': float, 'distance': float}
+    # Target tracking
+    'target': None,
     'target_ts': 0.0,
-    'cmd_vel': None,  # {'linear': float, 'angular': float}
+    'target_vx': 0.0,
+    'target_vd': 0.0,
+    'prev_target': None,
+    'prev_target_ts': 0.0,
+    # Commands
+    'cmd_vel': {'linear': 0, 'angular': 0},
     'cmd_vel_ts': 0.0,
+    # Metrics
     'detection_fps': 0.0,
+    'cmd_rate': 0.0,
     'frame_count': 0,
+    'cmd_count': 0,
 }
 
 
@@ -47,20 +58,17 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'text/html')
             self.end_headers()
             self.wfile.write(self._get_html().encode())
-        
         elif self.path == '/stream':
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
             self.end_headers()
             self._stream_video()
-        
         elif self.path == '/status':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(self._get_status_json().encode())
-        
         else:
             self.send_error(404)
 
@@ -68,274 +76,443 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         return '''<!DOCTYPE html>
 <html>
 <head>
-    <title>WYZECAR Control</title>
+    <title>WYZECAR Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
-            background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 100%);
+            background: #0a0a12;
             color: #e0e0e0;
-            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-family: 'SF Mono', 'Fira Code', monospace;
             min-height: 100vh;
-            padding: 20px;
+            padding: 15px;
         }
-        .container {
-            max-width: 1200px;
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 15px;
+            max-width: 1400px;
             margin: 0 auto;
         }
-        header {
-            text-align: center;
-            margin-bottom: 20px;
+        @media (max-width: 900px) {
+            .dashboard { grid-template-columns: 1fr; }
         }
-        h1 {
-            font-size: 2em;
-            font-weight: 300;
-            color: #00d4ff;
-            text-shadow: 0 0 20px rgba(0,212,255,0.3);
+        .video-section {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
         }
-        .main {
-            display: grid;
-            grid-template-columns: 1fr 300px;
-            gap: 20px;
-        }
-        @media (max-width: 800px) {
-            .main { grid-template-columns: 1fr; }
-        }
-        .video-panel {
-            background: #16213e;
-            border-radius: 12px;
+        .video-container {
+            background: #12121a;
+            border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            border: 1px solid #2a2a3a;
         }
-        .video-panel img {
+        .video-container img {
             width: 100%;
             display: block;
         }
-        .status-panel {
+        .state-bar {
+            display: flex;
+            gap: 10px;
+            padding: 10px;
+            background: #12121a;
+            border-radius: 8px;
+            border: 1px solid #2a2a3a;
+        }
+        .state-indicator {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+        .state-indicator.active {
+            background: #00ff88;
+            color: #000;
+        }
+        .state-indicator.inactive {
+            background: #1a1a2a;
+            color: #444;
+        }
+        .telemetry {
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 10px;
         }
-        .card {
-            background: #16213e;
-            border-radius: 12px;
-            padding: 15px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        .panel {
+            background: #12121a;
+            border-radius: 8px;
+            padding: 12px;
+            border: 1px solid #2a2a3a;
         }
-        .card h3 {
-            font-size: 0.85em;
+        .panel-title {
+            font-size: 0.75em;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            color: #888;
+            letter-spacing: 2px;
+            color: #666;
             margin-bottom: 10px;
-            border-bottom: 1px solid #2a2a4a;
-            padding-bottom: 8px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #1a1a2a;
         }
-        .stat {
+        .metric {
             display: flex;
             justify-content: space-between;
-            padding: 6px 0;
-            border-bottom: 1px solid #1a1a3a;
+            align-items: center;
+            padding: 4px 0;
         }
-        .stat:last-child { border-bottom: none; }
-        .stat-label { color: #888; }
-        .stat-value { 
-            font-family: 'SF Mono', monospace;
-            font-weight: 500;
+        .metric-label {
+            color: #888;
+            font-size: 0.85em;
         }
-        .stat-value.good { color: #00ff88; }
-        .stat-value.warn { color: #ffaa00; }
-        .stat-value.bad { color: #ff4444; }
-        .stat-value.neutral { color: #00d4ff; }
-        .target-viz {
-            height: 120px;
-            background: #0a0a15;
-            border-radius: 8px;
+        .metric-value {
+            font-weight: bold;
+            font-size: 0.95em;
+        }
+        .metric-value.positive { color: #00ff88; }
+        .metric-value.negative { color: #ff6b6b; }
+        .metric-value.neutral { color: #00d4ff; }
+        .metric-value.warn { color: #ffaa00; }
+        
+        /* Command bars */
+        .cmd-bar-container {
+            margin: 8px 0;
+        }
+        .cmd-bar-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8em;
+            margin-bottom: 4px;
+        }
+        .cmd-bar {
+            height: 20px;
+            background: #1a1a2a;
+            border-radius: 4px;
             position: relative;
             overflow: hidden;
         }
-        .target-dot {
-            width: 16px;
-            height: 16px;
-            background: #00ff88;
-            border-radius: 50%;
+        .cmd-bar-fill {
             position: absolute;
-            transform: translate(-50%, -50%);
-            box-shadow: 0 0 10px #00ff88;
+            height: 100%;
             transition: all 0.1s ease;
         }
-        .target-crosshair {
+        .cmd-bar-fill.linear {
+            background: linear-gradient(90deg, #00ff88, #00cc66);
+        }
+        .cmd-bar-fill.angular {
+            background: linear-gradient(90deg, #00d4ff, #0099cc);
+        }
+        .cmd-bar-center {
             position: absolute;
-            top: 50%;
             left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: #444;
+        }
+        
+        /* Target visualization */
+        .target-viz {
+            height: 140px;
+            background: #0a0a12;
+            border-radius: 6px;
+            position: relative;
+            margin: 8px 0;
+        }
+        .target-grid {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+        }
+        .target-grid > div {
+            border: 1px solid #1a1a2a;
+        }
+        .target-dot {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: #00ff88;
+            border-radius: 50%;
             transform: translate(-50%, -50%);
-            width: 100%;
-            height: 100%;
+            box-shadow: 0 0 15px #00ff88;
+            transition: all 0.1s ease;
         }
-        .target-crosshair::before,
-        .target-crosshair::after {
-            content: '';
+        .target-velocity {
             position: absolute;
-            background: #333;
+            width: 3px;
+            background: #ffaa00;
+            transform-origin: bottom center;
         }
-        .target-crosshair::before {
-            width: 1px;
-            height: 100%;
+        .target-center {
+            position: absolute;
             left: 50%;
-        }
-        .target-crosshair::after {
-            width: 100%;
-            height: 1px;
             top: 50%;
+            width: 30px;
+            height: 30px;
+            border: 2px solid #333;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
         }
         .no-target {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: #666;
-            font-size: 0.9em;
-        }
-        .legend {
-            margin-top: 15px;
-            padding: 10px;
-            background: #0a0a15;
-            border-radius: 8px;
-            font-size: 0.85em;
-        }
-        .legend-item {
+            inset: 0;
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 4px 0;
+            justify-content: center;
+            color: #444;
+            font-size: 0.9em;
         }
-        .legend-color {
-            width: 12px;
+        
+        /* Distance zones */
+        .distance-bar {
             height: 12px;
-            border-radius: 3px;
+            background: linear-gradient(90deg, #ff4444 0%, #ffaa00 30%, #00ff88 60%, #00d4ff 100%);
+            border-radius: 4px;
+            position: relative;
+            margin: 8px 0;
         }
-        .legend-color.green { background: #00ff88; }
-        .legend-color.yellow { background: #ffaa00; }
+        .distance-marker {
+            position: absolute;
+            top: -4px;
+            width: 4px;
+            height: 20px;
+            background: white;
+            border-radius: 2px;
+            transform: translateX(-50%);
+            box-shadow: 0 0 5px white;
+        }
+        .distance-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.7em;
+            color: #666;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🚗 WYZECAR Control</h1>
-        </header>
-        <div class="main">
-            <div class="video-panel">
+    <div class="dashboard">
+        <div class="video-section">
+            <div class="state-bar">
+                <div id="state-idle" class="state-indicator inactive">IDLE</div>
+                <div id="state-tracking" class="state-indicator inactive">TRACKING</div>
+                <div id="state-stopped" class="state-indicator inactive">STOPPED</div>
+                <div id="state-searching" class="state-indicator inactive">SEARCHING</div>
+            </div>
+            <div class="video-container">
                 <img src="/stream" alt="Camera Feed" />
             </div>
-            <div class="status-panel">
-                <div class="card">
-                    <h3>Target Position</h3>
-                    <div class="target-viz">
-                        <div class="target-crosshair"></div>
-                        <div id="target-dot" class="target-dot" style="display:none;"></div>
-                        <div id="no-target" class="no-target">No target</div>
+        </div>
+        
+        <div class="telemetry">
+            <div class="panel">
+                <div class="panel-title">Target Position</div>
+                <div class="target-viz">
+                    <div class="target-grid">
+                        <div></div><div></div><div></div>
+                        <div></div><div></div><div></div>
+                        <div></div><div></div><div></div>
                     </div>
-                    <div class="stat">
-                        <span class="stat-label">X Position</span>
-                        <span id="target-x" class="stat-value neutral">--</span>
+                    <div class="target-center"></div>
+                    <div id="target-dot" class="target-dot" style="display:none;"></div>
+                    <div id="velocity-arrow" class="target-velocity" style="display:none;"></div>
+                    <div id="no-target" class="no-target">NO TARGET</div>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">X Position</span>
+                    <span id="pos-x" class="metric-value neutral">--</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">X Velocity</span>
+                    <span id="vel-x" class="metric-value neutral">--</span>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-title">Distance</div>
+                <div class="distance-bar">
+                    <div id="dist-marker" class="distance-marker" style="left:50%;"></div>
+                </div>
+                <div class="distance-labels">
+                    <span>CLOSE</span>
+                    <span>STOP</span>
+                    <span>TARGET</span>
+                    <span>FAR</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Distance</span>
+                    <span id="distance" class="metric-value neutral">--</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Approach Rate</span>
+                    <span id="vel-d" class="metric-value neutral">--</span>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-title">Motor Commands</div>
+                <div class="cmd-bar-container">
+                    <div class="cmd-bar-label">
+                        <span>Linear (forward/back)</span>
+                        <span id="cmd-linear-val">0.00</span>
                     </div>
-                    <div class="stat">
-                        <span class="stat-label">Distance</span>
-                        <span id="target-dist" class="stat-value neutral">--</span>
+                    <div class="cmd-bar">
+                        <div class="cmd-bar-center"></div>
+                        <div id="cmd-linear-bar" class="cmd-bar-fill linear"></div>
                     </div>
                 </div>
-                <div class="card">
-                    <h3>Motor Commands</h3>
-                    <div class="stat">
-                        <span class="stat-label">Linear</span>
-                        <span id="cmd-linear" class="stat-value neutral">0.00</span>
+                <div class="cmd-bar-container">
+                    <div class="cmd-bar-label">
+                        <span>Angular (left/right)</span>
+                        <span id="cmd-angular-val">0.00</span>
                     </div>
-                    <div class="stat">
-                        <span class="stat-label">Angular</span>
-                        <span id="cmd-angular" class="stat-value neutral">0.00</span>
-                    </div>
-                </div>
-                <div class="card">
-                    <h3>System Status</h3>
-                    <div class="stat">
-                        <span class="stat-label">Detection FPS</span>
-                        <span id="det-fps" class="stat-value good">--</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-label">Frame Age</span>
-                        <span id="frame-age" class="stat-value good">--</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-label">Status</span>
-                        <span id="status" class="stat-value good">OK</span>
+                    <div class="cmd-bar">
+                        <div class="cmd-bar-center"></div>
+                        <div id="cmd-angular-bar" class="cmd-bar-fill angular"></div>
                     </div>
                 </div>
-                <div class="legend">
-                    <div class="legend-item">
-                        <div class="legend-color green"></div>
-                        <span>TARGET (being followed)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color yellow"></div>
-                        <span>Other detected persons</span>
-                    </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-title">System</div>
+                <div class="metric">
+                    <span class="metric-label">Detection FPS</span>
+                    <span id="det-fps" class="metric-value positive">--</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Command Rate</span>
+                    <span id="cmd-rate" class="metric-value positive">--</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Frame Age</span>
+                    <span id="frame-age" class="metric-value positive">--</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Target Age</span>
+                    <span id="target-age" class="metric-value positive">--</span>
                 </div>
             </div>
         </div>
     </div>
+    
     <script>
+        const STOP_DIST = 0.15;
+        const TARGET_DIST = 0.35;
+        
         function updateStatus() {
             fetch('/status')
                 .then(r => r.json())
                 .then(data => {
-                    // Target
+                    // State indicators
+                    const states = ['idle', 'tracking', 'stopped', 'searching'];
+                    let activeState = 'idle';
+                    
+                    if (data.target && data.target_age < 1.2) {
+                        if (data.target.distance <= STOP_DIST) {
+                            activeState = 'stopped';
+                        } else {
+                            activeState = 'tracking';
+                        }
+                    } else if (data.target_age < 6) {
+                        activeState = 'searching';
+                    }
+                    
+                    states.forEach(s => {
+                        const el = document.getElementById('state-' + s);
+                        el.className = 'state-indicator ' + (s === activeState ? 'active' : 'inactive');
+                    });
+                    
+                    // Target visualization
                     const dot = document.getElementById('target-dot');
+                    const arrow = document.getElementById('velocity-arrow');
                     const noTarget = document.getElementById('no-target');
+                    const viz = document.querySelector('.target-viz');
+                    
                     if (data.target) {
-                        const viz = document.querySelector('.target-viz');
                         const x = (data.target.x + 1) / 2 * viz.offsetWidth;
-                        const y = (data.target.distance) * viz.offsetHeight;
+                        const y = data.target.distance * viz.offsetHeight;
+                        
                         dot.style.left = x + 'px';
                         dot.style.top = y + 'px';
                         dot.style.display = 'block';
                         noTarget.style.display = 'none';
-                        document.getElementById('target-x').textContent = data.target.x.toFixed(2);
-                        document.getElementById('target-dist').textContent = data.target.distance.toFixed(2);
+                        
+                        // Velocity arrow
+                        if (Math.abs(data.vx) > 0.05) {
+                            const len = Math.min(40, Math.abs(data.vx) * 30);
+                            const angle = data.vx > 0 ? 90 : -90;
+                            arrow.style.left = x + 'px';
+                            arrow.style.top = y + 'px';
+                            arrow.style.height = len + 'px';
+                            arrow.style.transform = 'rotate(' + angle + 'deg)';
+                            arrow.style.display = 'block';
+                        } else {
+                            arrow.style.display = 'none';
+                        }
+                        
+                        document.getElementById('pos-x').textContent = data.target.x.toFixed(2);
+                        document.getElementById('vel-x').textContent = (data.vx >= 0 ? '+' : '') + data.vx.toFixed(2);
+                        document.getElementById('distance').textContent = data.target.distance.toFixed(2);
+                        document.getElementById('vel-d').textContent = (data.vd >= 0 ? '+' : '') + data.vd.toFixed(2);
+                        
+                        // Distance marker
+                        document.getElementById('dist-marker').style.left = (data.target.distance * 100) + '%';
                     } else {
                         dot.style.display = 'none';
-                        noTarget.style.display = 'block';
-                        document.getElementById('target-x').textContent = '--';
-                        document.getElementById('target-dist').textContent = '--';
+                        arrow.style.display = 'none';
+                        noTarget.style.display = 'flex';
+                        document.getElementById('pos-x').textContent = '--';
+                        document.getElementById('vel-x').textContent = '--';
+                        document.getElementById('distance').textContent = '--';
+                        document.getElementById('vel-d').textContent = '--';
                     }
                     
-                    // Motor commands
-                    if (data.cmd_vel) {
-                        document.getElementById('cmd-linear').textContent = data.cmd_vel.linear.toFixed(2);
-                        document.getElementById('cmd-angular').textContent = data.cmd_vel.angular.toFixed(2);
-                    }
+                    // Motor command bars
+                    const linearBar = document.getElementById('cmd-linear-bar');
+                    const angularBar = document.getElementById('cmd-angular-bar');
+                    const linear = data.cmd_vel ? data.cmd_vel.linear : 0;
+                    const angular = data.cmd_vel ? data.cmd_vel.angular : 0;
                     
-                    // System status
-                    document.getElementById('det-fps').textContent = data.detection_fps.toFixed(1);
-                    document.getElementById('frame-age').textContent = data.frame_age.toFixed(1) + 's';
+                    document.getElementById('cmd-linear-val').textContent = linear.toFixed(2);
+                    document.getElementById('cmd-angular-val').textContent = angular.toFixed(2);
                     
-                    const statusEl = document.getElementById('status');
-                    if (data.frame_age > 2) {
-                        statusEl.textContent = 'STALE';
-                        statusEl.className = 'stat-value bad';
-                    } else if (data.target) {
-                        statusEl.textContent = 'TRACKING';
-                        statusEl.className = 'stat-value good';
+                    // Linear bar (center = 0, left = back, right = forward)
+                    const linearPct = Math.abs(linear) / 0.7 * 50;
+                    if (linear >= 0) {
+                        linearBar.style.left = '50%';
+                        linearBar.style.width = linearPct + '%';
                     } else {
-                        statusEl.textContent = 'SEARCHING';
-                        statusEl.className = 'stat-value warn';
+                        linearBar.style.left = (50 - linearPct) + '%';
+                        linearBar.style.width = linearPct + '%';
                     }
+                    
+                    // Angular bar (center = 0, left = left turn, right = right turn)
+                    const angularPct = Math.abs(angular) / 1.0 * 50;
+                    if (angular >= 0) {
+                        angularBar.style.left = '50%';
+                        angularBar.style.width = angularPct + '%';
+                    } else {
+                        angularBar.style.left = (50 - angularPct) + '%';
+                        angularBar.style.width = angularPct + '%';
+                    }
+                    
+                    // System metrics
+                    document.getElementById('det-fps').textContent = data.detection_fps.toFixed(1) + ' Hz';
+                    document.getElementById('cmd-rate').textContent = data.cmd_rate.toFixed(1) + ' Hz';
+                    document.getElementById('frame-age').textContent = data.frame_age.toFixed(2) + 's';
+                    document.getElementById('target-age').textContent = data.target_age.toFixed(2) + 's';
+                    
+                    // Color code ages
+                    const frameAgeEl = document.getElementById('frame-age');
+                    frameAgeEl.className = 'metric-value ' + (data.frame_age > 1 ? 'negative' : 'positive');
+                    
+                    const targetAgeEl = document.getElementById('target-age');
+                    targetAgeEl.className = 'metric-value ' + (data.target_age > 1.2 ? 'warn' : 'positive');
                 })
-                .catch(e => {
-                    document.getElementById('status').textContent = 'ERROR';
-                    document.getElementById('status').className = 'stat-value bad';
-                });
+                .catch(e => console.error(e));
         }
-        setInterval(updateStatus, 200);
+        
+        setInterval(updateStatus, 100);
         updateStatus();
     </script>
 </body>
@@ -352,12 +529,12 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         cv2.putText(frame, "Waiting for camera...", (40, 120),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
                 
-                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 self.wfile.write(b'--frame\r\n')
                 self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
                 self.wfile.write(jpeg.tobytes())
                 self.wfile.write(b'\r\n')
-                time.sleep(0.1)
+                time.sleep(0.08)
             except Exception:
                 break
 
@@ -367,10 +544,12 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             return json.dumps({
                 'target': state['target'],
                 'target_age': now - state['target_ts'] if state['target_ts'] > 0 else 999,
+                'vx': state['target_vx'],
+                'vd': state['target_vd'],
                 'cmd_vel': state['cmd_vel'],
                 'detection_fps': state['detection_fps'],
+                'cmd_rate': state['cmd_rate'],
                 'frame_age': now - state['frame_ts'] if state['frame_ts'] > 0 else 999,
-                'frame_count': state['frame_count'],
             })
 
 
@@ -391,9 +570,10 @@ class WebViewerNode(Node):
         
         self.has_debug = False
         self.frame_times = []
+        self.cmd_times = []
         
-        self.get_logger().info('Enhanced Web Viewer started - http://0.0.0.0:8080')
-        self.create_timer(1.0, self.update_fps)
+        self.get_logger().info('Advanced Web Dashboard - http://0.0.0.0:8080')
+        self.create_timer(0.5, self.update_metrics)
 
     def debug_callback(self, msg):
         self.has_debug = True
@@ -417,13 +597,24 @@ class WebViewerNode(Node):
             self.get_logger().error(f'Frame error: {e}')
 
     def target_callback(self, msg):
+        now = time.time()
         with state_lock:
+            # Calculate velocities from previous target
+            if state['target'] is not None and state['target_ts'] > 0:
+                dt = now - state['target_ts']
+                if dt > 0.01 and dt < 0.5:
+                    raw_vx = (msg.point.x - state['target']['x']) / dt
+                    raw_vd = (msg.point.z - state['target']['distance']) / dt
+                    # Smooth velocities
+                    state['target_vx'] = state['target_vx'] * 0.6 + raw_vx * 0.4
+                    state['target_vd'] = state['target_vd'] * 0.6 + raw_vd * 0.4
+            
             state['target'] = {
                 'x': msg.point.x,
                 'y': msg.point.y,
                 'distance': msg.point.z
             }
-            state['target_ts'] = time.time()
+            state['target_ts'] = now
 
     def cmd_vel_callback(self, msg):
         with state_lock:
@@ -432,22 +623,27 @@ class WebViewerNode(Node):
                 'angular': msg.angular.z
             }
             state['cmd_vel_ts'] = time.time()
+            state['cmd_count'] += 1
+            self.cmd_times.append(time.time())
 
-    def update_fps(self):
+    def update_metrics(self):
         now = time.time()
-        # Clear target if stale
         with state_lock:
-            if now - state['target_ts'] > 1.0:
+            # Clear stale data
+            if now - state['target_ts'] > 1.5:
                 state['target'] = None
+                state['target_vx'] = 0.0
+                state['target_vd'] = 0.0
+            
             if now - state['cmd_vel_ts'] > 1.0:
                 state['cmd_vel'] = {'linear': 0, 'angular': 0}
             
-            # Calculate FPS
+            # Calculate rates
             self.frame_times = [t for t in self.frame_times if now - t < 2.0]
-            if len(self.frame_times) > 1:
-                state['detection_fps'] = len(self.frame_times) / 2.0
-            else:
-                state['detection_fps'] = 0.0
+            self.cmd_times = [t for t in self.cmd_times if now - t < 2.0]
+            
+            state['detection_fps'] = len(self.frame_times) / 2.0 if self.frame_times else 0
+            state['cmd_rate'] = len(self.cmd_times) / 2.0 if self.cmd_times else 0
 
 
 def main():
@@ -459,8 +655,8 @@ def main():
     server_thread.start()
     
     print("\n" + "="*50)
-    print("  WYZECAR Enhanced Web Viewer")
-    print("  Open in browser: http://<DART-IP>:8080")
+    print("  WYZECAR Advanced Dashboard")
+    print("  http://<DART-IP>:8080")
     print("="*50 + "\n")
     
     try:

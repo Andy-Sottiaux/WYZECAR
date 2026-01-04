@@ -39,7 +39,7 @@ class SmoothMotorController(Node):
         # ROS2 Parameters
         self.declare_parameter('i2c_bus', 3)
         self.declare_parameter('esp32_address', 0x42)
-        self.declare_parameter('max_speed_percent', 90)  # High power for torque
+        self.declare_parameter('max_speed_percent', 75)  # Balanced power
         self.declare_parameter('acceleration_rate', 40.0)  # % per second (quick ramp)
         self.declare_parameter('deceleration_rate', 50.0)  # % per second (responsive braking)
         self.declare_parameter('servo_slew_rate', 120.0)  # degrees per second (responsive steering)

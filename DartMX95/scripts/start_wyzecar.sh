@@ -103,13 +103,22 @@ case "${1:-all}" in
     fi
     
     # Human detector with aggressive frame skipping for ARM CPU
+    # Set DISABLE_YOLO=1 to run in passthrough mode (no YOLO, just video feed)
+    YOLO_DISABLE_FLAG=""
+    if [ "${DISABLE_YOLO:-0}" = "1" ]; then
+      YOLO_DISABLE_FLAG="-p disable_yolo:=true"
+      echo "  ⚠ YOLO DISABLED (passthrough mode)"
+    fi
     $STDBUF_CMD ros2 run wyzecar_vision human_detector --ros-args \
       -p process_every_n_frames:=5 \
       -p input_size:=256 \
       -p confidence_threshold:=0.4 \
+      $YOLO_DISABLE_FLAG \
       >> "$DETLOG" 2>&1 &
     DET_PID=$!
-    echo "  ✓ Human detector (YOLO @ 256px, skip 5)"
+    if [ -z "$YOLO_DISABLE_FLAG" ]; then
+      echo "  ✓ Human detector (YOLO @ 256px, skip 5)"
+    fi
     sleep 5
     if ! kill -0 "$DET_PID" 2>/dev/null; then
       echo "[FATAL] Human detector exited immediately. See $DETLOG" >> "$LOGFILE"
@@ -166,6 +175,16 @@ case "${1:-all}" in
     ros2 run wyzecar_vision human_detector
     ;;
     
+  noyolo)
+    # Run everything but with YOLO disabled (to test if video feed is stable)
+    echo ""
+    echo "╔════════════════════════════════════════════╗"
+    echo "║     WYZECAR - NO YOLO (Debug Mode)         ║"
+    echo "╚════════════════════════════════════════════╝"
+    echo ""
+    DISABLE_YOLO=1 exec $0 all
+    ;;
+    
   follower)
     ros2 run wyzecar_vision follower
     ;;
@@ -198,9 +217,10 @@ case "${1:-all}" in
     
   *)
     print_banner
-    echo "Usage: $0 {all|build|status|logs|camera|detector|follower|motor|web}"
+    echo "Usage: $0 {all|noyolo|build|status|logs|camera|detector|follower|motor|web}"
     echo ""
     echo "  all      - Start everything (recommended)"
+    echo "  noyolo   - Start everything but DISABLE YOLO (test video feed)"
     echo "  build    - Build the ROS2 workspace"
     echo "  status   - Show running nodes and topic rates"
     echo "  logs     - Tail the log file"
@@ -211,6 +231,9 @@ case "${1:-all}" in
     echo "  follower - Follower only (verbose)"
     echo "  motor    - Motor controller only (verbose)"
     echo "  web      - Web viewer only"
+    echo ""
+    echo "Environment variables:"
+    echo "  DISABLE_YOLO=1 - Disable YOLO in human detector"
     ;;
 esac
 

@@ -35,10 +35,6 @@ class HumanDetectorNode(Node):
     def __init__(self):
         super().__init__('human_detector')
         
-        if not YOLO_AVAILABLE:
-            self.get_logger().error('ultralytics not installed!')
-            return
-        
         # Parameters
         self.declare_parameter('model', 'yolov8n.pt')
         self.declare_parameter('confidence_threshold', 0.4)
@@ -46,19 +42,29 @@ class HumanDetectorNode(Node):
         self.declare_parameter('input_size', 256)
         # Run YOLO only every N frames to keep the pipeline responsive on ARM
         self.declare_parameter('process_every_n_frames', 5)
+        # Set to True to disable YOLO entirely (passthrough mode for debugging)
+        self.declare_parameter('disable_yolo', False)
         
         self.model_name = self.get_parameter('model').get_parameter_value().string_value
         self.conf_threshold = self.get_parameter('confidence_threshold').get_parameter_value().double_value
         self.min_box_area = self.get_parameter('min_box_area').get_parameter_value().integer_value
         self.input_size = self.get_parameter('input_size').get_parameter_value().integer_value
         self.process_every_n_frames = self.get_parameter('process_every_n_frames').get_parameter_value().integer_value
+        self.disable_yolo = self.get_parameter('disable_yolo').get_parameter_value().bool_value
         if self.process_every_n_frames < 1:
             self.process_every_n_frames = 1
         
-        # Load YOLO model
-        self.get_logger().info(f'Loading YOLO model: {self.model_name}')
-        self.model = self._load_yolo_model_with_recovery(self.model_name)
-        self.get_logger().info('YOLO model loaded successfully')
+        # Load YOLO model (unless disabled)
+        self.model = None
+        if self.disable_yolo:
+            self.get_logger().warn('*** YOLO DISABLED (passthrough mode) ***')
+        elif not YOLO_AVAILABLE:
+            self.get_logger().error('ultralytics not installed! Running in passthrough mode.')
+            self.disable_yolo = True
+        else:
+            self.get_logger().info(f'Loading YOLO model: {self.model_name}')
+            self.model = self._load_yolo_model_with_recovery(self.model_name)
+            self.get_logger().info('YOLO model loaded successfully')
         
         self.bridge = CvBridge()
         
@@ -84,18 +90,23 @@ class HumanDetectorNode(Node):
         self.last_image_time = 0.0
         self.last_yolo_time = 0.0
         
-        # Start YOLO worker thread
+        # Start YOLO worker thread (only if YOLO is enabled)
         self.running = True
-        self.yolo_thread = threading.Thread(target=self.yolo_worker, daemon=True)
-        self.yolo_thread.start()
+        self.yolo_thread = None
+        if not self.disable_yolo:
+            self.yolo_thread = threading.Thread(target=self.yolo_worker, daemon=True)
+            self.yolo_thread.start()
         
         # Timer to publish debug images at steady rate (not blocking on YOLO)
         self.create_timer(0.1, self.publish_debug)  # 10 Hz
         self.create_timer(2.0, self.log_status)
         
-        self.get_logger().info('Human Detector Node started (THREADED)')
-        self.get_logger().info(f'  Model: {self.model_name} @ {self.input_size}px')
-        self.get_logger().info(f'  Process every {self.process_every_n_frames} frames')
+        if self.disable_yolo:
+            self.get_logger().info('Human Detector Node started (PASSTHROUGH MODE - no YOLO)')
+        else:
+            self.get_logger().info('Human Detector Node started (THREADED)')
+            self.get_logger().info(f'  Model: {self.model_name} @ {self.input_size}px')
+            self.get_logger().info(f'  Process every {self.process_every_n_frames} frames')
 
     def _load_yolo_model_with_recovery(self, model_name: str):
         """
@@ -242,24 +253,29 @@ class HumanDetectorNode(Node):
         
         height, width = frame.shape[:2]
         
-        # Draw detections
-        for i, person in enumerate(detections):
-            x1, y1, x2, y2 = person['bbox']
-            is_target = (i == 0)
-            color = (0, 255, 0) if is_target else (0, 255, 255)
-            thickness = 3 if is_target else 1
-            
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-            label = f"TARGET {person['confidence']:.2f}" if is_target else f"Person {person['confidence']:.2f}"
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        # Draw detections (only if YOLO is enabled)
+        if not self.disable_yolo:
+            for i, person in enumerate(detections):
+                x1, y1, x2, y2 = person['bbox']
+                is_target = (i == 0)
+                color = (0, 255, 0) if is_target else (0, 255, 255)
+                thickness = 3 if is_target else 1
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+                label = f"TARGET {person['confidence']:.2f}" if is_target else f"Person {person['confidence']:.2f}"
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # Draw crosshair
         cv2.line(frame, (width//2, 0), (width//2, height), (100, 100, 100), 1)
         cv2.line(frame, (0, height//2), (width, height//2), (100, 100, 100), 1)
         
         # Status overlay
-        status = f"YOLO: {self.yolo_fps:.1f} fps | Persons: {len(detections)}"
-        cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        if self.disable_yolo:
+            status = "YOLO: DISABLED (passthrough mode)"
+            cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        else:
+            status = f"YOLO: {self.yolo_fps:.1f} fps | Persons: {len(detections)}"
+            cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
         # Publish
         try:
@@ -275,13 +291,18 @@ class HumanDetectorNode(Node):
         img_age = (now - self.last_image_time) if self.last_image_time > 0 else -1.0
         yolo_age = (now - self.last_yolo_time) if self.last_yolo_time > 0 else -1.0
 
-        self.get_logger().info(
-            f'[DETECTOR] Frames:{self.frame_count} | YOLO:{self.yolo_fps:.1f}fps | '
-            f'Detections:{self.detection_count} | ImgAge:{img_age:.1f}s | YoloAge:{yolo_age:.1f}s'
-        )
+        if self.disable_yolo:
+            self.get_logger().info(
+                f'[DETECTOR] Frames:{self.frame_count} | YOLO:DISABLED | ImgAge:{img_age:.1f}s'
+            )
+        else:
+            self.get_logger().info(
+                f'[DETECTOR] Frames:{self.frame_count} | YOLO:{self.yolo_fps:.1f}fps | '
+                f'Detections:{self.detection_count} | ImgAge:{img_age:.1f}s | YoloAge:{yolo_age:.1f}s'
+            )
         if img_age > 2.0:
             self.get_logger().warn(f'[DETECTOR] Camera stream stale (no /image_raw for {img_age:.1f}s)')
-        if yolo_age > 5.0 and self.frame_count > 0:
+        if not self.disable_yolo and yolo_age > 5.0 and self.frame_count > 0:
             self.get_logger().warn(f'[DETECTOR] YOLO worker stalled (no inference for {yolo_age:.1f}s)')
         self.detection_count = 0
 

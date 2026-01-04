@@ -98,6 +98,20 @@ class HumanDetectorNode(Node):
         self.get_logger().info(f'  Model: {self.model_name}')
         self.get_logger().info(f'  Confidence threshold: {self.conf_threshold}')
         self.get_logger().info(f'  Min box area: {self.min_box_area}')
+        
+        # Status logging timer (every 2 seconds)
+        self.detection_count = 0
+        self.target_count = 0
+        self.create_timer(2.0, self.log_status)
+
+    def log_status(self):
+        """Periodic status logging"""
+        if self.frame_count > 0:
+            self.get_logger().info(
+                f'[DETECTOR] Frames:{self.frame_count} | Detections:{self.detection_count} | Targets:{self.target_count}'
+            )
+        self.detection_count = 0
+        self.target_count = 0
 
     def image_callback(self, msg):
         """Process incoming camera frame"""
@@ -179,10 +193,12 @@ class HumanDetectorNode(Node):
         
         # Select target person (largest/closest)
         target = None
+        self.detection_count += len(persons)
         if persons:
             # Sort by area (largest first = closest)
             persons.sort(key=lambda p: p['area'], reverse=True)
             target = persons[0]
+            self.target_count += 1
             
             # Publish target position
             target_msg = PointStamped()

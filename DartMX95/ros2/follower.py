@@ -127,6 +127,19 @@ class FollowerNode(Node):
         self.get_logger().info(f'  Max linear speed: {self.max_linear}')
         self.get_logger().info(f'  Max angular speed: {self.max_angular}')
         self.get_logger().info(f'  Lost timeout: {self.lost_timeout}s')
+        
+        # Status logging
+        self.cmd_count = 0
+        self.create_timer(2.0, self.log_status)
+    
+    def log_status(self):
+        """Periodic status logging"""
+        if self.current_target and not self.target_lost:
+            t = self.current_target
+            self.get_logger().info(
+                f'[FOLLOWER] Target: x={t["x"]:.2f} dist={t["distance"]:.2f} | Cmds sent: {self.cmd_count}'
+            )
+        self.cmd_count = 0
 
     def target_callback(self, msg):
         """Receive target person position"""
@@ -189,12 +202,7 @@ class FollowerNode(Node):
         cmd.linear.x = float(linear_cmd)
         cmd.angular.z = float(angular_cmd)
         
-        # Log periodically
-        self.get_logger().debug(
-            f'Target: x={target["x"]:.2f} dist={target["distance"]:.2f} | '
-            f'Cmd: lin={linear_cmd:.2f} ang={angular_cmd:.2f}'
-        )
-        
+        self.cmd_count += 1
         self.cmd_pub.publish(cmd)
 
 

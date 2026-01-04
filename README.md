@@ -52,7 +52,7 @@ pip install -r requirements.txt
 python motor_control.py
 ```
 
-## DartMX95 Configuration (Planned)
+## DartMX95 Configuration
 
 Vision-based human tracking and following using ROS2.
 
@@ -61,35 +61,52 @@ Vision-based human tracking and following using ROS2.
   - 6x Cortex-A55 @ 2.0GHz
   - NPU for AI/ML acceleration
 - **Carrier**: Sonata board
-- **Camera**: USB camera (AR0330 sensor)
-- **Motors**: L298N + DC motors (same as CubeOrangePlus)
+- **Camera**: CAM2C USB camera
+- **Motor Driver**: L298N dual H-bridge
+- **Motors**: Front + Rear DC motors
+- **Steering**: Servo (Ackermann style)
 
 ### Software Stack
 - Host OS: Debian
 - Container: Docker with Ubuntu 22.04
 - Middleware: ROS2 Humble
 - Vision: YOLOv8-nano for human detection
+- Communication: I2C (DART ↔ ESP32)
 
-### ROS2 Nodes (Planned)
-- `camera_node` - Publishes camera images
-- `human_detector_node` - Detects humans, publishes target position
-- `motor_controller_node` - Controls L298N via GPIO/PWM
-- `follower_node` - PID controller to follow detected human
+### ROS2 Nodes
+- `v4l2_camera` - Publishes camera images
+- `human_detector` - YOLOv8 detection, publishes target position
+- `follower` - PID controller for human following
+- `motor_controller` - Sends commands to ESP32 via I2C
+- `web_viewer` - Browser-based debug visualization
 
 ## Project Structure
 ```
-WyzeCar/
+WYZECAR/
 ├── CubeOrangePlus/
-│   ├── src/main.cpp         # ESP32 firmware
-│   ├── platformio.ini       # PlatformIO config
-│   ├── gui/                  # Python motor test GUI
-│   ├── WIRING.txt           # Wiring diagrams
-│   └── ARDUROVER_SETUP.txt  # ArduRover configuration
+│   ├── src/main.cpp           # ESP32 firmware
+│   ├── platformio.ini         # PlatformIO config
+│   ├── gui/                   # Python motor test GUI
+│   └── docs/                  # Wiring, ArduRover setup
 │
 └── DartMX95/
-    ├── ARCHITECTURE.txt     # System architecture
-    ├── SETUP_GUIDE.txt      # Setup instructions
-    └── WIRING.txt           # Wiring diagrams
+    ├── README.md              # Setup guide
+    ├── platformio.ini         # ESP32 build config
+    ├── src/                   # ESP32 firmware
+    │   └── main.cpp
+    ├── ros2/                  # ROS2 Python nodes
+    │   ├── motor_controller.py
+    │   ├── human_detector.py
+    │   ├── follower.py
+    │   └── web_viewer.py
+    ├── docker/                # Docker config
+    │   └── Dockerfile
+    ├── scripts/               # Utility scripts
+    │   └── start_wyzecar.sh
+    └── docs/                  # Documentation
+        ├── wiring.md
+        ├── i2c_protocol.md
+        └── architecture.md
 ```
 
 ## Wiring Overview

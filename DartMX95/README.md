@@ -18,15 +18,15 @@ This guide walks through setting up the DART-MX95 (Debian host) with the ESP32 m
 
 ### Motor/Servo Wiring (ESP32 to L298N)
 
-| ESP32 Pin | L298N Pin | Function          |
-| --------- | --------- | ----------------- |
-| GPIO25    | ENA       | Left Motor PWM    |
-| GPIO26    | IN1       | Left Motor Dir A  |
-| GPIO27    | IN2       | Left Motor Dir B  |
-| GPIO12    | IN3       | Right Motor Dir A |
-| GPIO13    | IN4       | Right Motor Dir B |
-| GPIO14    | ENB       | Right Motor PWM   |
-| GPIO33    | -         | Servo Signal      |
+| ESP32 Pin | L298N Pin | Function           |
+| --------- | --------- | ------------------ |
+| GPIO25    | ENA       | Front Motor PWM    |
+| GPIO26    | IN1       | Front Motor Dir A  |
+| GPIO27    | IN2       | Front Motor Dir B  |
+| GPIO12    | IN3       | Rear Motor Dir A   |
+| GPIO13    | IN4       | Rear Motor Dir B   |
+| GPIO14    | ENB       | Rear Motor PWM     |
+| GPIO33    | -         | Steering Servo     |
 
 ---
 
@@ -169,10 +169,10 @@ cd wyzecar_ws/src
 ros2 pkg create --build-type ament_python wyzecar_control
 ```
 
-Copy the I2C motor controller node:
+Copy the motor controller node:
 
 ```bash
-cp /workspace/DartMX95/ros2_motor_controller_i2c.py wyzecar_control/wyzecar_control/motor_controller.py
+cp /workspace/DartMX95/ros2/motor_controller.py wyzecar_control/wyzecar_control/
 ```
 
 Update `wyzecar_control/setup.py` entry points:
@@ -350,8 +350,8 @@ cd /workspace/wyzecar_ws/src
 ros2 pkg create --build-type ament_python wyzecar_vision
 
 # Copy the detector and follower nodes
-cp /workspace/DartMX95/human_detector.py wyzecar_vision/wyzecar_vision/human_detector.py
-cp /workspace/DartMX95/follower.py wyzecar_vision/wyzecar_vision/follower.py
+cp /workspace/DartMX95/ros2/human_detector.py wyzecar_vision/wyzecar_vision/
+cp /workspace/DartMX95/ros2/follower.py wyzecar_vision/wyzecar_vision/
 ```
 
 Update `wyzecar_vision/setup.py` entry points:

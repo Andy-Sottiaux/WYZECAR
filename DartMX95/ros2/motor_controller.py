@@ -99,6 +99,7 @@ class MotorControllerI2CNode(Node):
         self.esp32_connected = False
         self.emergency_stop_active = False
         self.current_servo_angle = 90  # Center position
+        self.consecutive_i2c_errors = 0
         
         # Initialize I2C connection
         self.init_i2c_connection()
@@ -118,9 +119,17 @@ class MotorControllerI2CNode(Node):
     
     def log_status(self):
         """Periodic status logging"""
+        age = time.time() - self.last_cmd_time
         if self.cmd_received_count > 0:
             self.get_logger().info(
-                f'[MOTOR] Cmds:{self.cmd_received_count} | Rear={self.last_rear}% Front={self.last_front}% Steer={self.last_servo}°'
+                f'[MOTOR] Cmds:{self.cmd_received_count} | Rear={self.last_rear}% Front={self.last_front}% '
+                f'Steer={self.last_servo}° | CmdAge={age:.1f}s | I2CErrs={self.consecutive_i2c_errors}'
+            )
+        else:
+            # Still print something useful so "car stopped" has a breadcrumb trail
+            self.get_logger().info(
+                f'[MOTOR] idle | LastCmd Rear={self.last_rear}% Front={self.last_front}% Steer={self.last_servo}° | '
+                f'CmdAge={age:.1f}s | I2CErrs={self.consecutive_i2c_errors}'
             )
         self.cmd_received_count = 0
 
@@ -139,6 +148,7 @@ class MotorControllerI2CNode(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to initialize I2C bus {self.i2c_bus}: {e}')
             self.esp32_connected = False
+            self.consecutive_i2c_errors += 1
 
     def send_motor_command(self, rear_speed, front_speed, servo_angle=None):
         """Send motor speed command via I2C
@@ -172,9 +182,20 @@ class MotorControllerI2CNode(Node):
         with self.i2c_lock:
             try:
                 self.i2c_bus_handle.write_i2c_block_data(self.esp32_address, command[0], command[1:])
+                self.consecutive_i2c_errors = 0
                 return True
             except Exception as e:
                 self.get_logger().error(f'I2C write error: {e}')
+                self.consecutive_i2c_errors += 1
+                # If I2C starts failing, try re-opening the bus (common after USB/camera glitches or resume)
+                if self.consecutive_i2c_errors in (5, 20):
+                    self.get_logger().warn('Multiple I2C errors; attempting to reinitialize I2C bus')
+                    try:
+                        if self.i2c_bus_handle:
+                            self.i2c_bus_handle.close()
+                    except Exception:
+                        pass
+                    self.init_i2c_connection()
                 return False
 
     def send_emergency_stop(self):
@@ -230,6 +251,7 @@ class MotorControllerI2CNode(Node):
                 
             except Exception as e:
                 self.get_logger().error(f'I2C status request error: {e}')
+                self.consecutive_i2c_errors += 1
                 return False
 
     def cmd_vel_callback(self, msg):

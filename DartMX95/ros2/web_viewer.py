@@ -18,10 +18,13 @@ import cv2
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import numpy as np
+import time
 
 # Global frame storage
 latest_frame = None
 frame_lock = threading.Lock()
+latest_frame_ts = 0.0
+latest_frame_source = "none"  # debug_image | image_raw | none
 
 
 class MJPEGHandler(BaseHTTPRequestHandler):
@@ -81,14 +84,31 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             
             while True:
                 try:
+                    now = time.time()
                     with frame_lock:
                         if latest_frame is not None:
                             frame = latest_frame.copy()
+                            age_s = now - latest_frame_ts if latest_frame_ts > 0 else 0.0
+                            source = latest_frame_source
                         else:
                             # Create placeholder
                             frame = np.zeros((480, 640, 3), dtype=np.uint8)
                             cv2.putText(frame, "Waiting for camera...", (150, 240),
                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                            age_s = 0.0
+                            source = "none"
+
+                    # If frames are stale, overlay a warning (helps diagnose freezes)
+                    if latest_frame is not None and age_s > 1.0:
+                        cv2.putText(
+                            frame,
+                            f"STALE FRAME ({age_s:.1f}s) source={source}",
+                            (10, frame.shape[0] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (0, 0, 255),
+                            2,
+                        )
                     
                     # Lower quality and add sleep to reduce CPU load
                     _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
@@ -97,7 +117,13 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     self.wfile.write(jpeg.tobytes())
                     self.wfile.write(b'\r\n')
                     time.sleep(0.1)  # 10 FPS max to reduce load
-                except:
+                except Exception as e:
+                    # Client disconnected or encoding error.
+                    # Don't crash the server; just end this stream connection.
+                    try:
+                        self.server._wyzecar_last_stream_error = str(e)
+                    except Exception:
+                        pass
                     break
 
 
@@ -105,6 +131,7 @@ class WebViewerNode(Node):
     def __init__(self):
         super().__init__('web_viewer')
         self.bridge = CvBridge()
+        self.last_log_ts = 0.0
         
         # Try debug_image first (has annotations), fall back to raw
         self.debug_sub = self.create_subscription(
@@ -115,19 +142,22 @@ class WebViewerNode(Node):
         
         self.has_debug = False
         self.get_logger().info('Web Viewer started - http://0.0.0.0:8080')
+        self.create_timer(2.0, self.log_status)
 
     def debug_callback(self, msg):
-        global latest_frame
+        global latest_frame, latest_frame_ts, latest_frame_source
         self.has_debug = True
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             with frame_lock:
                 latest_frame = frame
+                latest_frame_ts = time.time()
+                latest_frame_source = "debug_image"
         except Exception as e:
             self.get_logger().error(f'Debug image error: {e}')
 
     def raw_callback(self, msg):
-        global latest_frame
+        global latest_frame, latest_frame_ts, latest_frame_source
         if self.has_debug:
             return  # Prefer debug image if available
         try:
@@ -137,8 +167,28 @@ class WebViewerNode(Node):
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             with frame_lock:
                 latest_frame = frame
+                latest_frame_ts = time.time()
+                latest_frame_source = "image_raw"
         except Exception as e:
             self.get_logger().error(f'Raw image error: {e}')
+
+    def log_status(self):
+        global latest_frame_ts, latest_frame_source
+        now = time.time()
+        with frame_lock:
+            ts = latest_frame_ts
+            src = latest_frame_source
+            has = latest_frame is not None
+
+        if not has:
+            self.get_logger().warn('[WEB] No frames received yet')
+            return
+
+        age = now - ts if ts > 0 else 0.0
+        if age > 2.0:
+            self.get_logger().warn(f'[WEB] Frame stream stale: age={age:.1f}s source={src}')
+        else:
+            self.get_logger().info(f'[WEB] OK: age={age:.1f}s source={src}')
 
 
 def main():
@@ -147,6 +197,7 @@ def main():
     
     # Start HTTP server in background
     server = HTTPServer(('0.0.0.0', 8080), MJPEGHandler)
+    server._wyzecar_last_stream_error = ""
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     

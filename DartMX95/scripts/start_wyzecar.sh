@@ -7,7 +7,10 @@ set -e
 LOGDIR="/workspace/logs"
 mkdir -p $LOGDIR
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOGFILE="$LOGDIR/wyzecar_$TIMESTAMP.log"
+RUNLOGDIR="$LOGDIR/wyzecar_$TIMESTAMP"
+mkdir -p "$RUNLOGDIR"
+LOGFILE="$RUNLOGDIR/run.log"
+export ROS_LOG_DIR="$RUNLOGDIR/ros2"
 
 # Make Ultralytics cache writable inside container (prevents warnings + partial writes)
 export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-/tmp/Ultralytics}"
@@ -15,6 +18,9 @@ mkdir -p "$YOLO_CONFIG_DIR" 2>/dev/null || true
 
 # Ensure Python flushes logs promptly when redirected
 export PYTHONUNBUFFERED=1
+
+# Line-buffered output so logs flush immediately
+export STDBUF_CMD="stdbuf -oL -eL"
 
 # Source ROS2
 source /opt/ros/humble/setup.bash
@@ -43,38 +49,57 @@ case "${1:-all}" in
     echo "  Camera:  /dev/video13"
     echo "  I2C:     /dev/i2c-3 @ 0x42"
     echo "  Web:     http://0.0.0.0:8080"
-    echo "  Logs:    $LOGFILE"
+    echo "  Logs:    $RUNLOGDIR"
     echo ""
     echo "Starting nodes..."
     
-    # Start nodes - all output to log file
+    # Start nodes - separate log files per process (much easier to debug crashes)
+    CAMLOG="$RUNLOGDIR/camera.log"
+    DETLOG="$RUNLOGDIR/detector.log"
+    FOLLOG="$RUNLOGDIR/follower.log"
+    MOTLOG="$RUNLOGDIR/motor.log"
+    WEBLOG="$RUNLOGDIR/web.log"
+
+    echo "=== WYZECAR run $TIMESTAMP ===" > "$LOGFILE"
+    echo "Logs:" >> "$LOGFILE"
+    echo "  camera:   $CAMLOG" >> "$LOGFILE"
+    echo "  detector: $DETLOG" >> "$LOGFILE"
+    echo "  follower: $FOLLOG" >> "$LOGFILE"
+    echo "  motor:    $MOTLOG" >> "$LOGFILE"
+    echo "  web:      $WEBLOG" >> "$LOGFILE"
+    echo "" >> "$LOGFILE"
+
     # Camera at 320x240 UYVY (MJPG not supported by v4l2_camera)
-    ros2 run v4l2_camera v4l2_camera_node --ros-args \
+    $STDBUF_CMD ros2 run v4l2_camera v4l2_camera_node --ros-args \
       -p video_device:=/dev/video13 \
       -p image_size:=[320,240] \
       -p pixel_format:=UYVY \
-      >> "$LOGFILE" 2>&1 &
+      >> "$CAMLOG" 2>&1 &
+    CAM_PID=$!
     echo "  ✓ Camera node (320x240)"
     sleep 2
     
     # Human detector with aggressive frame skipping for ARM CPU
-    ros2 run wyzecar_vision human_detector --ros-args \
+    $STDBUF_CMD ros2 run wyzecar_vision human_detector --ros-args \
       -p process_every_n_frames:=5 \
       -p input_size:=256 \
       -p confidence_threshold:=0.4 \
-      >> "$LOGFILE" 2>&1 &
+      >> "$DETLOG" 2>&1 &
+    DET_PID=$!
     echo "  ✓ Human detector (YOLO @ 256px, skip 5)"
     sleep 5
     
-    ros2 run wyzecar_vision follower \
-      >> "$LOGFILE" 2>&1 &
+    $STDBUF_CMD ros2 run wyzecar_vision follower \
+      >> "$FOLLOG" 2>&1 &
+    FOL_PID=$!
     echo "  ✓ Follower controller"
     sleep 1
     
-    ros2 run wyzecar_control motor_controller --ros-args \
+    $STDBUF_CMD ros2 run wyzecar_control motor_controller --ros-args \
       -p i2c_bus:=3 \
       -p command_timeout:=9999.0 \
-      >> "$LOGFILE" 2>&1 &
+      >> "$MOTLOG" 2>&1 &
+    MOT_PID=$!
     echo "  ✓ Motor controller"
     sleep 1
     
@@ -82,19 +107,20 @@ case "${1:-all}" in
     echo "════════════════════════════════════════════"
     echo "  All nodes running!"
     echo "  Open: http://192.168.5.183:8080"
-    echo "  Logs: tail -f $LOGFILE"
+    echo "  Logs: tail -f $RUNLOGDIR/*.log"
     echo "  Press Ctrl+C to stop"
     echo "════════════════════════════════════════════"
     echo ""
     
-    # Web viewer in foreground with minimal output
-    python3 /workspace/DartMX95/ros2/web_viewer.py 2>> "$LOGFILE"
+    # Web viewer in foreground (if it exits, we want the reason in WEBLOG)
+    $STDBUF_CMD python3 /workspace/DartMX95/ros2/web_viewer.py >> "$WEBLOG" 2>&1
     
     # Cleanup on exit
     echo ""
     echo "Stopping all nodes..."
-    pkill -f "ros2" 2>/dev/null || true
-    echo "Done. Full logs saved to: $LOGFILE"
+    kill "$CAM_PID" "$DET_PID" "$FOL_PID" "$MOT_PID" 2>/dev/null || true
+    pkill -f "ros2 run" 2>/dev/null || true
+    echo "Done. Full logs saved to: $RUNLOGDIR"
     ;;
     
   camera)

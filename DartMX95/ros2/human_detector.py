@@ -81,6 +81,8 @@ class HumanDetectorNode(Node):
         # Stats
         self.frame_count = 0
         self.detection_count = 0
+        self.last_image_time = 0.0
+        self.last_yolo_time = 0.0
         
         # Start YOLO worker thread
         self.running = True
@@ -127,6 +129,7 @@ class HumanDetectorNode(Node):
     def image_callback(self, msg):
         """Just save the latest frame - don't process here!"""
         self.frame_count += 1
+        self.last_image_time = time.time()
         
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -225,6 +228,7 @@ class HumanDetectorNode(Node):
             # Calculate FPS
             elapsed = time.time() - start_time
             self.yolo_fps = 1.0 / elapsed if elapsed > 0 else 0
+            self.last_yolo_time = time.time()
             last_processed_id = frame_id
 
     def publish_debug(self):
@@ -267,9 +271,18 @@ class HumanDetectorNode(Node):
 
     def log_status(self):
         """Log status every 2 seconds"""
+        now = time.time()
+        img_age = (now - self.last_image_time) if self.last_image_time > 0 else -1.0
+        yolo_age = (now - self.last_yolo_time) if self.last_yolo_time > 0 else -1.0
+
         self.get_logger().info(
-            f'[DETECTOR] Frames:{self.frame_count} | YOLO:{self.yolo_fps:.1f}fps | Detections:{self.detection_count}'
+            f'[DETECTOR] Frames:{self.frame_count} | YOLO:{self.yolo_fps:.1f}fps | '
+            f'Detections:{self.detection_count} | ImgAge:{img_age:.1f}s | YoloAge:{yolo_age:.1f}s'
         )
+        if img_age > 2.0:
+            self.get_logger().warn(f'[DETECTOR] Camera stream stale (no /image_raw for {img_age:.1f}s)')
+        if yolo_age > 5.0 and self.frame_count > 0:
+            self.get_logger().warn(f'[DETECTOR] YOLO worker stalled (no inference for {yolo_age:.1f}s)')
         self.detection_count = 0
 
     def destroy_node(self):

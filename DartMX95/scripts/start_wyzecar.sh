@@ -102,22 +102,22 @@ case "${1:-all}" in
       exit 1
     fi
     
-    # Human detector with aggressive frame skipping for ARM CPU
-    # Set DISABLE_YOLO=1 to run in passthrough mode (no YOLO, just video feed)
-    YOLO_DISABLE_FLAG=""
-    if [ "${DISABLE_YOLO:-0}" = "1" ]; then
-      YOLO_DISABLE_FLAG="-p disable_yolo:=true"
-      echo "  ⚠ YOLO DISABLED (passthrough mode)"
+    # Human detector using OpenCV DNN + MobileNet-SSD (stable on ARM!)
+    # Set DISABLE_DETECTION=1 to run in passthrough mode (just video feed)
+    DETECT_DISABLE_FLAG=""
+    if [ "${DISABLE_DETECTION:-0}" = "1" ]; then
+      DETECT_DISABLE_FLAG="-p disable_detection:=true"
+      echo "  ⚠ DETECTION DISABLED (passthrough mode)"
     fi
     $STDBUF_CMD ros2 run wyzecar_vision human_detector --ros-args \
-      -p process_every_n_frames:=5 \
-      -p input_size:=256 \
-      -p confidence_threshold:=0.4 \
-      $YOLO_DISABLE_FLAG \
+      -p process_every_n_frames:=2 \
+      -p input_size:=300 \
+      -p confidence_threshold:=0.5 \
+      $DETECT_DISABLE_FLAG \
       >> "$DETLOG" 2>&1 &
     DET_PID=$!
-    if [ -z "$YOLO_DISABLE_FLAG" ]; then
-      echo "  ✓ Human detector (YOLO @ 256px, skip 5)"
+    if [ -z "$DETECT_DISABLE_FLAG" ]; then
+      echo "  ✓ Human detector (MobileNet-SSD @ 300px)"
     fi
     sleep 5
     if ! kill -0 "$DET_PID" 2>/dev/null; then
@@ -175,14 +175,14 @@ case "${1:-all}" in
     ros2 run wyzecar_vision human_detector
     ;;
     
-  noyolo)
-    # Run everything but with YOLO disabled (to test if video feed is stable)
+  nodetect)
+    # Run everything but with detection disabled (to test if video feed is stable)
     echo ""
     echo "╔════════════════════════════════════════════╗"
-    echo "║     WYZECAR - NO YOLO (Debug Mode)         ║"
+    echo "║   WYZECAR - NO DETECTION (Debug Mode)      ║"
     echo "╚════════════════════════════════════════════╝"
     echo ""
-    DISABLE_YOLO=1 exec $0 all
+    DISABLE_DETECTION=1 exec $0 all
     ;;
     
   follower)
@@ -217,23 +217,23 @@ case "${1:-all}" in
     
   *)
     print_banner
-    echo "Usage: $0 {all|noyolo|build|status|logs|camera|detector|follower|motor|web}"
+    echo "Usage: $0 {all|nodetect|build|status|logs|camera|detector|follower|motor|web}"
     echo ""
     echo "  all      - Start everything (recommended)"
-    echo "  noyolo   - Start everything but DISABLE YOLO (test video feed)"
+    echo "  nodetect - Start everything but DISABLE detection (test video feed)"
     echo "  build    - Build the ROS2 workspace"
     echo "  status   - Show running nodes and topic rates"
     echo "  logs     - Tail the log file"
     echo ""
     echo "Individual nodes (for debugging):"
     echo "  camera   - Camera only (verbose)"
-    echo "  detector - Human detector only (verbose)"
+    echo "  detector - Human detector only (MobileNet-SSD)"
     echo "  follower - Follower only (verbose)"
     echo "  motor    - Motor controller only (verbose)"
     echo "  web      - Web viewer only"
     echo ""
     echo "Environment variables:"
-    echo "  DISABLE_YOLO=1 - Disable YOLO in human detector"
+    echo "  DISABLE_DETECTION=1 - Disable person detection (passthrough mode)"
     ;;
 esac
 

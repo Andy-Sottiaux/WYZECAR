@@ -67,20 +67,20 @@ class FollowerNode(Node):
     def __init__(self):
         super().__init__('follower')
         
-        # Parameters - balanced for smooth but responsive following
-        self.declare_parameter('target_distance', 0.4)  # Normalized (0=very close, 1=far)
-        self.declare_parameter('max_linear_speed', 0.45)  # m/s equivalent (good tracking speed)
-        self.declare_parameter('max_angular_speed', 0.8)  # rad/s equivalent (responsive turns)
-        self.declare_parameter('lost_timeout', 1.5)  # seconds (react faster to lost target)
-        self.declare_parameter('dead_zone', 0.1)  # Moderate dead zone
+        # Parameters - gentle, smooth following
+        self.declare_parameter('target_distance', 0.45)  # Normalized (0=very close, 1=far)
+        self.declare_parameter('max_linear_speed', 0.2)  # m/s equivalent (gentle speed)
+        self.declare_parameter('max_angular_speed', 0.35)  # rad/s equivalent (smooth turns)
+        self.declare_parameter('lost_timeout', 2.0)  # seconds
+        self.declare_parameter('dead_zone', 0.15)  # Larger dead zone = less jitter
         
-        # PID parameters - balanced for smooth but responsive control
-        self.declare_parameter('linear_kp', 0.65)
-        self.declare_parameter('linear_ki', 0.03)
-        self.declare_parameter('linear_kd', 0.12)
-        self.declare_parameter('angular_kp', 0.9)
-        self.declare_parameter('angular_ki', 0.02)
-        self.declare_parameter('angular_kd', 0.15)
+        # PID parameters - gentle, smooth control
+        self.declare_parameter('linear_kp', 0.4)
+        self.declare_parameter('linear_ki', 0.02)
+        self.declare_parameter('linear_kd', 0.15)
+        self.declare_parameter('angular_kp', 0.5)
+        self.declare_parameter('angular_ki', 0.01)
+        self.declare_parameter('angular_kd', 0.2)
         
         self.target_distance = self.get_parameter('target_distance').get_parameter_value().double_value
         self.max_linear = self.get_parameter('max_linear_speed').get_parameter_value().double_value

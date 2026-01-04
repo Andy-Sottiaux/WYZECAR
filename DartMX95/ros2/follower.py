@@ -121,9 +121,9 @@ class FollowerNode(Node):
     def __init__(self):
         super().__init__('follower')
         
-        # Core parameters
-        self.declare_parameter('target_distance', 0.4)
-        self.declare_parameter('stop_distance', 0.25)  # Stop completely when this close
+        # Core parameters (distance: 0=far, 1=close based on bounding box size)
+        self.declare_parameter('target_distance', 0.6)  # Try to maintain this closeness
+        self.declare_parameter('stop_distance', 0.85)  # Stop when this close (high = very close)
         self.declare_parameter('max_linear_speed', 0.55)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('lost_timeout', 1.5)
@@ -254,15 +254,17 @@ class FollowerNode(Node):
         angular_error = -predicted_x
         angular_cmd = self.angular_pid.compute(angular_error)
         
-        # Check if we're close enough to stop
-        if self.tracker.distance <= self.stop_distance:
+        # Check if we're close enough to stop (higher distance value = closer)
+        if self.tracker.distance >= self.stop_distance:
             # Close enough - stop forward motion, but still allow steering
             cmd.linear.x = 0.0
             cmd.angular.z = float(max(-self.max_angular, min(self.max_angular, angular_cmd)))
             return cmd
         
         # Linear control - maintain distance
-        distance_error = self.tracker.distance - self.target_distance
+        # Positive error = too far (low distance value), need to move forward
+        # Negative error = too close (high distance value), need to back up
+        distance_error = self.target_distance - self.tracker.distance
         linear_cmd = self.linear_pid.compute(distance_error)
         
         # Adaptive speed - slow down when turning hard (keeps target in frame)

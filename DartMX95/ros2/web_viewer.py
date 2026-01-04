@@ -56,6 +56,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         if self.path == '/':
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.end_headers()
             self.wfile.write(self._get_html().encode())
         elif self.path == '/stream':
@@ -64,11 +65,18 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self._stream_video()
         elif self.path == '/status':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(self._get_status_json().encode())
+            try:
+                json_data = self._get_status_json()
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json_data.encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(f'Error: {e}'.encode())
         else:
             self.send_error(404)
 

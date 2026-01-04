@@ -2,29 +2,26 @@
 """
 Human Detector Node for WYZECAR Vision-Based Following System
 
-Uses YOLOv8 to detect humans in camera frames and publishes the target
-person's position for the follower node to track.
+Uses YOLOv8 in a SEPARATE THREAD to prevent blocking the main ROS2 loop.
+Camera keeps streaming, YOLO processes in background.
 
 Topics:
     Subscribed:
         /image_raw (sensor_msgs/Image): Camera frames
     Published:
         /target_person (geometry_msgs/PointStamped): Target person position
-        /detections (vision_msgs/Detection2DArray): All detections
         /debug_image (sensor_msgs/Image): Annotated debug image
-
-Usage:
-    ros2 run wyzecar_vision human_detector
 """
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped
-from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
+import threading
+import time
 
 try:
     from ultralytics import YOLO
@@ -38,24 +35,18 @@ class HumanDetectorNode(Node):
         super().__init__('human_detector')
         
         if not YOLO_AVAILABLE:
-            self.get_logger().error('ultralytics not installed. Install with: pip3 install ultralytics')
+            self.get_logger().error('ultralytics not installed!')
             return
         
         # Parameters
-        self.declare_parameter('model', 'yolov8n.pt')  # nano model for speed
-        self.declare_parameter('confidence_threshold', 0.5)
-        self.declare_parameter('target_class', 0)  # 0 = person in COCO
-        self.declare_parameter('min_box_area', 5000)  # Minimum detection size
-        self.declare_parameter('publish_debug_image', True)
-        self.declare_parameter('process_every_n_frames', 3)  # Skip frames for speed
-        self.declare_parameter('input_size', 320)  # Resize input for faster inference
+        self.declare_parameter('model', 'yolov8n.pt')
+        self.declare_parameter('confidence_threshold', 0.4)
+        self.declare_parameter('min_box_area', 3000)
+        self.declare_parameter('input_size', 256)
         
         self.model_name = self.get_parameter('model').get_parameter_value().string_value
         self.conf_threshold = self.get_parameter('confidence_threshold').get_parameter_value().double_value
-        self.target_class = self.get_parameter('target_class').get_parameter_value().integer_value
         self.min_box_area = self.get_parameter('min_box_area').get_parameter_value().integer_value
-        self.publish_debug = self.get_parameter('publish_debug_image').get_parameter_value().bool_value
-        self.skip_frames = self.get_parameter('process_every_n_frames').get_parameter_value().integer_value
         self.input_size = self.get_parameter('input_size').get_parameter_value().integer_value
         
         # Load YOLO model
@@ -63,201 +54,180 @@ class HumanDetectorNode(Node):
         self.model = YOLO(self.model_name)
         self.get_logger().info('YOLO model loaded successfully')
         
-        # CV Bridge for image conversion
         self.bridge = CvBridge()
+        
+        # Shared state (protected by lock)
+        self.lock = threading.Lock()
+        self.latest_frame = None
+        self.latest_header = None
+        self.latest_detections = []  # List of person detections
+        self.yolo_fps = 0.0
         
         # Subscribers
         self.image_sub = self.create_subscription(
-            Image,
-            '/image_raw',
-            self.image_callback,
-            10
-        )
+            Image, '/image_raw', self.image_callback, 10)
         
         # Publishers
-        self.target_pub = self.create_publisher(
-            PointStamped,
-            '/target_person',
-            10
-        )
+        self.target_pub = self.create_publisher(PointStamped, '/target_person', 10)
+        self.debug_image_pub = self.create_publisher(Image, '/debug_image', 10)
         
-        self.detections_pub = self.create_publisher(
-            Detection2DArray,
-            '/detections',
-            10
-        )
-        
-        if self.publish_debug:
-            self.debug_image_pub = self.create_publisher(
-                Image,
-                '/debug_image',
-                10
-            )
-        
-        # State
-        self.last_target = None
+        # Stats
         self.frame_count = 0
-        
-        self.get_logger().info('Human Detector Node started')
-        self.get_logger().info(f'  Model: {self.model_name} @ {self.input_size}px')
-        self.get_logger().info(f'  Process every {self.skip_frames} frames')
-        self.get_logger().info(f'  Confidence: {self.conf_threshold}, Min area: {self.min_box_area}')
-        
-        # Status logging timer (every 2 seconds)
         self.detection_count = 0
-        self.target_count = 0
+        
+        # Start YOLO worker thread
+        self.running = True
+        self.yolo_thread = threading.Thread(target=self.yolo_worker, daemon=True)
+        self.yolo_thread.start()
+        
+        # Timer to publish debug images at steady rate (not blocking on YOLO)
+        self.create_timer(0.1, self.publish_debug)  # 10 Hz
         self.create_timer(2.0, self.log_status)
-
-    def log_status(self):
-        """Periodic status logging"""
-        if self.frame_count > 0:
-            self.get_logger().info(
-                f'[DETECTOR] Frames:{self.frame_count} | Detections:{self.detection_count} | Targets:{self.target_count}'
-            )
-        self.detection_count = 0
-        self.target_count = 0
+        
+        self.get_logger().info('Human Detector Node started (THREADED)')
+        self.get_logger().info(f'  Model: {self.model_name} @ {self.input_size}px')
 
     def image_callback(self, msg):
-        """Process incoming camera frame"""
+        """Just save the latest frame - don't process here!"""
         self.frame_count += 1
         
-        # Skip frames for better performance (process every Nth frame)
-        if self.frame_count % self.skip_frames != 0:
-            return
-        
-        # Convert ROS Image to OpenCV
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            with self.lock:
+                self.latest_frame = cv_image
+                self.latest_header = msg.header
         except Exception as e:
             self.get_logger().error(f'Failed to convert image: {e}')
-            return
+
+    def yolo_worker(self):
+        """Background thread that runs YOLO on latest frame"""
+        self.get_logger().info('YOLO worker thread started')
         
-        height, width = cv_image.shape[:2]
-        
-        # Run YOLO detection with smaller input size for speed
-        results = self.model(cv_image, verbose=False, conf=self.conf_threshold, imgsz=self.input_size)
-        
-        # Process detections
-        detections = []
-        persons = []
-        
-        for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                cls = int(box.cls[0])
-                conf = float(box.conf[0])
-                
-                # Only process person class
-                if cls != self.target_class:
+        while self.running:
+            # Grab latest frame
+            with self.lock:
+                if self.latest_frame is None:
+                    time.sleep(0.01)
                     continue
-                
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                box_width = x2 - x1
-                box_height = y2 - y1
-                box_area = box_width * box_height
-                
-                # Filter small detections
-                if box_area < self.min_box_area:
-                    continue
-                
-                # Calculate center position (normalized -1 to 1)
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-                norm_x = (center_x / width) * 2 - 1  # -1 (left) to 1 (right)
-                norm_y = (center_y / height) * 2 - 1  # -1 (top) to 1 (bottom)
-                
-                # Estimate relative distance (larger box = closer)
-                # Normalized so full-height person = 0.2 (very close)
-                relative_distance = 1.0 - (box_height / height)
-                
-                persons.append({
-                    'bbox': (x1, y1, x2, y2),
-                    'confidence': conf,
-                    'center': (center_x, center_y),
-                    'norm_pos': (norm_x, norm_y),
-                    'area': box_area,
-                    'distance': relative_distance
-                })
-                
-                # Create Detection2D message
-                det = Detection2D()
-                det.bbox.center.position.x = center_x
-                det.bbox.center.position.y = center_y
-                det.bbox.size_x = float(box_width)
-                det.bbox.size_y = float(box_height)
-                
-                hyp = ObjectHypothesisWithPose()
-                hyp.hypothesis.class_id = str(cls)
-                hyp.hypothesis.score = conf
-                det.results.append(hyp)
-                
-                detections.append(det)
-        
-        # Publish all detections
-        det_array = Detection2DArray()
-        det_array.header = msg.header
-        det_array.detections = detections
-        self.detections_pub.publish(det_array)
-        
-        # Select target person (largest/closest)
-        target = None
-        self.detection_count += len(persons)
-        if persons:
-            # Sort by area (largest first = closest)
-            persons.sort(key=lambda p: p['area'], reverse=True)
-            target = persons[0]
-            self.target_count += 1
+                frame = self.latest_frame.copy()
+                header = self.latest_header
             
-            # Publish target position
-            target_msg = PointStamped()
-            target_msg.header = msg.header
-            target_msg.point.x = target['norm_pos'][0]  # -1 to 1 (left to right)
-            target_msg.point.y = target['norm_pos'][1]  # -1 to 1 (top to bottom)
-            target_msg.point.z = target['distance']      # 0 to 1 (close to far)
-            self.target_pub.publish(target_msg)
+            start_time = time.time()
             
-            self.last_target = target
-        
-        # Publish debug image
-        if self.publish_debug:
-            debug_image = cv_image.copy()
-            
-            # Draw all person detections
-            for person in persons:
-                x1, y1, x2, y2 = [int(v) for v in person['bbox']]
-                color = (0, 255, 0) if person == target else (0, 255, 255)
-                thickness = 3 if person == target else 1
-                
-                cv2.rectangle(debug_image, (x1, y1), (x2, y2), color, thickness)
-                
-                label = f"Person {person['confidence']:.2f}"
-                if person == target:
-                    label = f"TARGET {person['confidence']:.2f}"
-                
-                cv2.putText(debug_image, label, (x1, y1 - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            
-            # Draw center crosshair
-            cv2.line(debug_image, (width//2, 0), (width//2, height), (128, 128, 128), 1)
-            cv2.line(debug_image, (0, height//2), (width, height//2), (128, 128, 128), 1)
-            
-            # Status text
-            status = f"Targets: {len(persons)} | Frame: {self.frame_count}"
-            cv2.putText(debug_image, status, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Publish debug image
+            # Run YOLO
             try:
-                debug_msg = self.bridge.cv2_to_imgmsg(debug_image, encoding='bgr8')
-                debug_msg.header = msg.header
-                self.debug_image_pub.publish(debug_msg)
+                results = self.model(frame, verbose=False, conf=self.conf_threshold, imgsz=self.input_size)
             except Exception as e:
-                self.get_logger().error(f'Failed to publish debug image: {e}')
+                self.get_logger().error(f'YOLO error: {e}')
+                time.sleep(0.1)
+                continue
+            
+            # Process results
+            height, width = frame.shape[:2]
+            persons = []
+            
+            for result in results:
+                for box in result.boxes:
+                    cls = int(box.cls[0])
+                    if cls != 0:  # 0 = person
+                        continue
+                    
+                    conf = float(box.conf[0])
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    box_area = (x2 - x1) * (y2 - y1)
+                    
+                    if box_area < self.min_box_area:
+                        continue
+                    
+                    center_x = (x1 + x2) / 2
+                    center_y = (y1 + y2) / 2
+                    norm_x = (center_x / width) * 2 - 1
+                    norm_y = (center_y / height) * 2 - 1
+                    distance = 1.0 - ((y2 - y1) / height)
+                    
+                    persons.append({
+                        'bbox': (int(x1), int(y1), int(x2), int(y2)),
+                        'confidence': conf,
+                        'norm_x': norm_x,
+                        'norm_y': norm_y,
+                        'distance': distance,
+                        'area': box_area
+                    })
+            
+            # Sort by area (largest = closest = target)
+            persons.sort(key=lambda p: p['area'], reverse=True)
+            
+            # Save detections
+            with self.lock:
+                self.latest_detections = persons
+            
+            # Publish target if found
+            if persons:
+                target = persons[0]
+                msg = PointStamped()
+                msg.header = header
+                msg.point.x = float(target['norm_x'])
+                msg.point.y = float(target['norm_y'])
+                msg.point.z = float(target['distance'])
+                self.target_pub.publish(msg)
+                self.detection_count += 1
+            
+            # Calculate FPS
+            elapsed = time.time() - start_time
+            self.yolo_fps = 1.0 / elapsed if elapsed > 0 else 0
+
+    def publish_debug(self):
+        """Publish annotated debug image at steady rate"""
+        with self.lock:
+            if self.latest_frame is None:
+                return
+            frame = self.latest_frame.copy()
+            detections = self.latest_detections.copy()
+            header = self.latest_header
+        
+        height, width = frame.shape[:2]
+        
+        # Draw detections
+        for i, person in enumerate(detections):
+            x1, y1, x2, y2 = person['bbox']
+            is_target = (i == 0)
+            color = (0, 255, 0) if is_target else (0, 255, 255)
+            thickness = 3 if is_target else 1
+            
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+            label = f"TARGET {person['confidence']:.2f}" if is_target else f"Person {person['confidence']:.2f}"
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Draw crosshair
+        cv2.line(frame, (width//2, 0), (width//2, height), (100, 100, 100), 1)
+        cv2.line(frame, (0, height//2), (width, height//2), (100, 100, 100), 1)
+        
+        # Status overlay
+        status = f"YOLO: {self.yolo_fps:.1f} fps | Persons: {len(detections)}"
+        cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Publish
+        try:
+            debug_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+            debug_msg.header = header
+            self.debug_image_pub.publish(debug_msg)
+        except Exception as e:
+            pass
+
+    def log_status(self):
+        """Log status every 2 seconds"""
+        self.get_logger().info(
+            f'[DETECTOR] Frames:{self.frame_count} | YOLO:{self.yolo_fps:.1f}fps | Detections:{self.detection_count}'
+        )
+        self.detection_count = 0
+
+    def destroy_node(self):
+        self.running = False
+        super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
-    
     try:
         node = HumanDetectorNode()
         rclpy.spin(node)
@@ -269,4 +239,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

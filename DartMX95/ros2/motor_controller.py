@@ -96,10 +96,13 @@ class MotorControllerI2CNode(Node):
         
         # State tracking
         self.last_cmd_time = time.time()
+        self.last_i2c_send_time = 0.0  # Rate limiting
+        self.min_i2c_interval = 0.1  # Max 10 I2C commands per second
         self.esp32_connected = False
         self.emergency_stop_active = False
         self.current_servo_angle = 90  # Center position
         self.consecutive_i2c_errors = 0
+        self.pending_command = None  # Store latest command if rate-limited
         
         # Initialize I2C connection
         self.init_i2c_connection()
@@ -116,7 +119,31 @@ class MotorControllerI2CNode(Node):
         self.last_rear = 0
         self.last_servo = 90
         self.create_timer(2.0, self.log_status)
+        
+        # Timer to flush pending commands (handles rate-limited commands)
+        self.create_timer(0.1, self.flush_pending_command)
     
+    def flush_pending_command(self):
+        """Send any pending rate-limited command"""
+        if self.pending_command is None:
+            return
+        
+        now = time.time()
+        if now - self.last_i2c_send_time < self.min_i2c_interval:
+            return  # Still rate limited
+        
+        rear_speed, front_speed, servo_angle = self.pending_command
+        success = self.send_motor_command(rear_speed, front_speed, servo_angle)
+        
+        if success:
+            self.last_i2c_send_time = now
+            self.cmd_received_count += 1
+            self.last_rear = rear_speed
+            self.last_front = front_speed
+            self.last_servo = servo_angle
+        
+        self.pending_command = None
+
     def log_status(self):
         """Periodic status logging"""
         age = time.time() - self.last_cmd_time
@@ -255,7 +282,7 @@ class MotorControllerI2CNode(Node):
                 return False
 
     def cmd_vel_callback(self, msg):
-        """Process incoming velocity commands"""
+        """Process incoming velocity commands with rate limiting"""
         if self.emergency_stop_active:
             return
             
@@ -282,14 +309,23 @@ class MotorControllerI2CNode(Node):
         servo_angle = max(self.servo_center - self.servo_range, 
                          min(self.servo_center + self.servo_range, servo_angle))
         
+        # Rate limiting: don't flood the I2C bus
+        now = time.time()
+        if now - self.last_i2c_send_time < self.min_i2c_interval:
+            # Store command and skip this one - next allowed send will use latest values
+            self.pending_command = (rear_speed, front_speed, servo_angle)
+            return
+        
         # Send motor command to ESP32 with servo angle
         success = self.send_motor_command(rear_speed, front_speed, servo_angle)
         
         if success:
+            self.last_i2c_send_time = now
             self.cmd_received_count += 1
             self.last_rear = rear_speed
             self.last_front = front_speed
             self.last_servo = servo_angle
+            self.pending_command = None
         else:
             self.get_logger().warn('Failed to send I2C motor command')
 
@@ -366,9 +402,10 @@ class MotorControllerI2CNode(Node):
         watchdog_thread = threading.Thread(target=self.watchdog_monitor, daemon=True)
         watchdog_thread.start()
         
-        # Status monitor thread  
-        status_thread = threading.Thread(target=self.status_monitor, daemon=True)
-        status_thread.start()
+        # Status monitor thread - DISABLED to reduce I2C traffic
+        # status_thread = threading.Thread(target=self.status_monitor, daemon=True)
+        # status_thread.start()
+        self.get_logger().info('Status monitor disabled to reduce I2C load')
 
     def destroy_node(self):
         """Clean shutdown"""

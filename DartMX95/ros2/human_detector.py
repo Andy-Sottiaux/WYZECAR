@@ -26,12 +26,20 @@ import os
 import urllib.request
 
 
-# Model files for MobileNet-SSD (COCO trained)
+# Model files for MobileNet-SSD (VOC trained)
 MODEL_DIR = "/tmp/wyzecar_models"
-PROTOTXT_URL = "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/MobileNetSSD_deploy.prototxt"
-CAFFEMODEL_URL = "https://github.com/chuanqi305/MobileNet-SSD/raw/master/MobileNetSSD_deploy.caffemodel"
 PROTOTXT_FILE = os.path.join(MODEL_DIR, "MobileNetSSD_deploy.prototxt")
 CAFFEMODEL_FILE = os.path.join(MODEL_DIR, "MobileNetSSD_deploy.caffemodel")
+
+# Multiple mirror URLs for reliability
+PROTOTXT_URLS = [
+    "https://raw.githubusercontent.com/opencv/opencv_extra/master/testdata/dnn/MobileNetSSD_deploy.prototxt",
+    "https://raw.githubusercontent.com/djmv/MobilNet_SSD_opencv/master/MobileNetSSD_deploy.prototxt",
+]
+CAFFEMODEL_URLS = [
+    "https://raw.githubusercontent.com/opencv/opencv_extra/master/testdata/dnn/MobileNetSSD_deploy.caffemodel",
+    "https://github.com/djmv/MobilNet_SSD_opencv/raw/master/MobileNetSSD_deploy.caffemodel",
+]
 
 # MobileNet-SSD VOC classes (person is index 15)
 VOC_CLASSES = [
@@ -113,15 +121,18 @@ class HumanDetectorNode(Node):
             self.get_logger().info(f'  Confidence threshold: {self.conf_threshold}')
             self.get_logger().info(f'  Process every {self.process_every_n_frames} frames')
 
-    def _download_file(self, url: str, dest: str):
-        """Download a file with progress logging."""
-        self.get_logger().info(f'Downloading: {url}')
-        try:
-            urllib.request.urlretrieve(url, dest)
-            self.get_logger().info(f'  -> Saved to {dest}')
-        except Exception as e:
-            self.get_logger().error(f'Download failed: {e}')
-            raise
+    def _download_file(self, urls: list, dest: str) -> bool:
+        """Download a file, trying multiple URLs until one works."""
+        for url in urls:
+            self.get_logger().info(f'Downloading: {url}')
+            try:
+                urllib.request.urlretrieve(url, dest)
+                self.get_logger().info(f'  -> Saved to {dest}')
+                return True
+            except Exception as e:
+                self.get_logger().warn(f'  -> Failed: {e}')
+                continue
+        return False
 
     def _load_model(self):
         """Load MobileNet-SSD model, downloading if necessary."""
@@ -129,11 +140,17 @@ class HumanDetectorNode(Node):
         
         # Download prototxt if missing
         if not os.path.exists(PROTOTXT_FILE):
-            self._download_file(PROTOTXT_URL, PROTOTXT_FILE)
+            if not self._download_file(PROTOTXT_URLS, PROTOTXT_FILE):
+                self.get_logger().error('Failed to download prototxt from all mirrors!')
+                self.disable_detection = True
+                return
         
         # Download caffemodel if missing
         if not os.path.exists(CAFFEMODEL_FILE):
-            self._download_file(CAFFEMODEL_URL, CAFFEMODEL_FILE)
+            if not self._download_file(CAFFEMODEL_URLS, CAFFEMODEL_FILE):
+                self.get_logger().error('Failed to download caffemodel from all mirrors!')
+                self.disable_detection = True
+                return
         
         # Verify files exist
         if not os.path.exists(PROTOTXT_FILE) or not os.path.exists(CAFFEMODEL_FILE):

@@ -81,6 +81,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             html = self._get_html().encode('utf-8')
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
@@ -93,6 +95,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
             self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
@@ -162,6 +165,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Private-Network', 'true')
                 self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
                 self.send_header('Pragma', 'no-cache')
                 self.send_header('Expires', '0')
@@ -185,17 +189,20 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         if self.path == '/':
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
             self.send_header('Connection', 'close')
             self.end_headers()
         elif self.path == '/stream':
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
             self.send_header('Connection', 'close')
             self.end_headers()
         elif self.path == '/status':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Private-Network', 'true')
             self.send_header('Connection', 'close')
             self.end_headers()
         else:
@@ -205,6 +212,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         """Handle CORS preflight."""
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Private-Network', 'true')
         self.send_header('Access-Control-Allow-Methods', 'POST, GET, HEAD, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Content-Length', '0')

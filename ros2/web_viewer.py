@@ -145,9 +145,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     angular = 0.0
                     
                     if state['keys'].get('w'):
-                        linear = 0.55  # Forward (a bit more authority for real motors)
+                        linear = 1.0  # Forward (full speed)
                     elif state['keys'].get('s'):
-                        linear = -0.45  # Backward (still slightly slower than forward)
+                        linear = -1.0  # Backward (full speed)
                     
                     if state['keys'].get('a'):
                         angular = -1.0  # Turn left (full deflection)
@@ -598,8 +598,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         
         function updateSpeedDisplay() {
             let speed = 0, turn = 0;
-            if (keys.w) speed = 40;
-            else if (keys.s) speed = -30;
+            if (keys.w) speed = 100;
+            else if (keys.s) speed = -100;
             if (keys.a) turn = -45;
             else if (keys.d) turn = 45;
             document.getElementById('speed-val').textContent = speed + '%';
@@ -621,7 +621,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     const linearBar = document.getElementById('cmd-linear-bar');
                     const angularBar = document.getElementById('cmd-angular-bar');
                     
-                    const linearPct = Math.abs(linear) / 0.5 * 50;
+                    const linearPct = Math.abs(linear) / 1.0 * 50;
                     linearBar.style.left = linear >= 0 ? '50%' : (50 - linearPct) + '%';
                     linearBar.style.width = linearPct + '%';
                     

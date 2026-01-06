@@ -145,9 +145,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     angular = 0.0
                     
                     if state['keys'].get('w'):
-                        linear = 1.0  # Forward (full speed - matches max_linear_speed)
+                        linear = 0.6  # Forward (60% speed - matches max_linear_speed)
                     elif state['keys'].get('s'):
-                        linear = -1.0  # Backward (full speed - matches max_linear_speed)
+                        linear = -0.6  # Backward (60% speed - matches max_linear_speed)
                     
                     if state['keys'].get('a'):
                         angular = -1.0  # Turn left (full deflection)
@@ -598,8 +598,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         
         function updateSpeedDisplay() {
             let speed = 0, turn = 0;
-            if (keys.w) speed = 100;
-            else if (keys.s) speed = -100;
+            if (keys.w) speed = 60;
+            else if (keys.s) speed = -60;
             if (keys.a) turn = -45;
             else if (keys.d) turn = 45;
             document.getElementById('speed-val').textContent = speed + '%';

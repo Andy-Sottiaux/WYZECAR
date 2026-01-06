@@ -39,12 +39,12 @@ class SmoothMotorController(Node):
         # ROS2 Parameters
         self.declare_parameter('i2c_bus', 3)
         self.declare_parameter('esp32_address', 0x42)
-        self.declare_parameter('max_speed_percent', 25)  # Quarter speed (25% max)
+        self.declare_parameter('max_speed_percent', 35)  # 35% max speed
         self.declare_parameter('acceleration_rate', 40.0)  # % per second (quick ramp)
         self.declare_parameter('deceleration_rate', 300.0)  # % per second (very fast braking when key released)
         self.declare_parameter('servo_slew_rate', 120.0)  # degrees per second (responsive steering)
         # Throttle mapping / stiction compensation
-        self.declare_parameter('max_linear_speed', 0.25)  # m/s - quarter speed
+        self.declare_parameter('max_linear_speed', 0.35)  # m/s - 35% speed
         self.declare_parameter('throttle_expo', 0.75)  # <1 increases low-end authority (helps overcome stiction)
         self.declare_parameter('min_moving_speed_percent', 12)  # min commanded speed when nonzero (reduces PWM whine)
         self.declare_parameter('startup_kick_enabled', True)
@@ -62,7 +62,7 @@ class SmoothMotorController(Node):
         # If your controller sends smaller values (e.g. +/-0.8), reduce this to get full range.
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('command_timeout', 2.0)
-        self.declare_parameter('control_rate', 25.0)  # Hz - smooth motion
+        self.declare_parameter('control_rate', 50.0)  # Hz - higher rate for lower latency
         self.declare_parameter('velocity_smoothing', 0.3)  # Moderate smoothing
         # ESP32 expects periodic I2C commands; it has a ~2s watchdog.
         # Keepalive ensures motors keep running even if command values are steady.

@@ -145,9 +145,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     angular = 0.0
                     
                     if state['keys'].get('w'):
-                        linear = 0.25  # Forward (quarter speed - matches max_linear_speed)
+                        linear = 0.35  # Forward (35% speed - matches max_linear_speed)
                     elif state['keys'].get('s'):
-                        linear = -0.25  # Backward (quarter speed - matches max_linear_speed)
+                        linear = -0.35  # Backward (35% speed - matches max_linear_speed)
                     
                     if state['keys'].get('a'):
                         angular = -1.0  # Turn left (full deflection)
@@ -502,7 +502,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         let connected = false;
         let hasFocus = false;
         let lastSendMs = 0;
-        const SEND_MIN_INTERVAL_MS = 50; // 20Hz max
+        const SEND_MIN_INTERVAL_MS = 20; // 50Hz max for lower latency
         
         // Send commands to server
         function sendCommand() {
@@ -598,8 +598,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         
         function updateSpeedDisplay() {
             let speed = 0, turn = 0;
-            if (keys.w) speed = 25;
-            else if (keys.s) speed = -25;
+            if (keys.w) speed = 35;
+            else if (keys.s) speed = -35;
             if (keys.a) turn = -45;
             else if (keys.d) turn = 45;
             document.getElementById('speed-val').textContent = speed + '%';
@@ -649,16 +649,16 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 .catch(console.error);
         }
         
-        setInterval(updateStatus, 100);
-        setInterval(sendCommand, 100);  // Keep-alive commands (10Hz)
+        setInterval(updateStatus, 50);  // 20Hz status updates
+        setInterval(sendCommand, 50);  // Keep-alive commands (20Hz)
         updateStatus();
     </script>
 </body>
 </html>'''
 
     def _stream_video(self):
-        """Stream video at ~15 FPS for responsive remote control."""
-        target_period_s = 1.0 / 15.0
+        """Stream video at ~30 FPS for low-latency remote control."""
+        target_period_s = 1.0 / 30.0
         while True:
             try:
                 loop_start = time.time()
@@ -670,8 +670,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         cv2.putText(frame, "Waiting for camera...", (200, 240),
                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                 
-                # Higher quality for remote driving
-                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                # Lower quality for faster encoding/transfer (reduces latency)
+                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 self.wfile.write(b'--frame\r\n')
                 self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
                 self.wfile.write(jpeg.tobytes())
@@ -681,7 +681,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-                # ~20 FPS (account for encode + send time)
+                # Target 30 FPS (account for encode + send time)
                 elapsed = time.time() - loop_start
                 sleep_s = target_period_s - elapsed
                 if sleep_s > 0:

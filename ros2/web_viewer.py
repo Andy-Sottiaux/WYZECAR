@@ -598,8 +598,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         
         function updateSpeedDisplay() {
             let speed = 0, turn = 0;
-            if (keys.w) speed = 100;
-            else if (keys.s) speed = -100;
+            if (keys.w) speed = 50;
+            else if (keys.s) speed = -50;
             if (keys.a) turn = -45;
             else if (keys.d) turn = 45;
             document.getElementById('speed-val').textContent = speed + '%';

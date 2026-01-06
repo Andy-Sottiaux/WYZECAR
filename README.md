@@ -1,134 +1,230 @@
-# WyzeCar
+# WYZECAR - Vision-Based Autonomous RC Car
 
-Autonomous RC car platform with two hardware configurations:
+An autonomous RC car platform that uses computer vision for human detection and following, built with ROS2, ESP32, and YOLOv8.
 
-1. **CubeOrangePlus** - ArduRover-based autopilot with ESP32 motor control
-2. **DartMX95** - ROS2 vision-based human tracking platform (in development)
+## Features
 
-## CubeOrangePlus Configuration
+- **Autonomous Human Following**: Uses YOLOv8 for real-time person detection and PID control for smooth following
+- **Remote Control Mode**: Web-based interface with WASD keyboard control
+- **Real-time Video Streaming**: 15 FPS camera feed with detection overlays
+- **Smooth Motion Control**: Advanced motor control with acceleration ramping and startup kick
+- **Cross-Browser Support**: Works in Chrome, Safari, and Firefox
+- **Robust Architecture**: Built on ROS2 Humble with Docker containerization
 
-RC car controlled by Cube Orange Plus running ArduRover firmware, with an ESP32 handling motor control.
+## Quick Start
 
-### Hardware
-- **Autopilot**: Cube Orange Plus (ArduRover)
-- **Motor Controller**: ESP32 WROOM
-- **Motor Driver**: L298N dual H-bridge
-- **Motors**: 2x DC motors (differential drive)
-- **Steering**: Servo (direct PWM from Cube)
+1. **SSH into your DART-MX95**:
+   ```bash
+   ssh root@<dart-ip>
+   sudo -i
+   ```
 
-### Signal Flow
-```
-Cube --[Throttle PWM]--> ESP32 --[Direction + PWM]--> L298N --> Motors
-Cube --[Steering PWM]--> Servo
-```
+2. **Clone the repository** (if not already done):
+   ```bash
+   git clone https://github.com/Andy-Sottiaux/WYZECAR.git /root/WYZECAR
+   ```
 
-### ESP32 Firmware Features
-- Reads throttle PWM from Cube Orange Plus (1000-2000us)
-- Controls L298N motor driver via GPIO/PWM
-- Two modes: AUTO (Cube control) and MANUAL (serial commands)
-- Safety timeout stops motors if PWM signal lost
+3. **Start WYZECAR**:
+   ```bash
+   cd /root/WYZECAR/DartMX95
+   ./wyzecar.sh
+   ```
 
-### Serial Commands
-```
-M1:<speed>   - Set Motor 1 speed (-255 to 255)
-M2:<speed>   - Set Motor 2 speed (-255 to 255)
-STOP         - Stop all motors
-STATUS       - Show current status
-MODE:AUTO    - Cube PWM control
-MODE:MANUAL  - Serial control
-```
+4. **Open the web interface**:
+   - Navigate to `http://<dart-ip>:8080` in your browser
+   - Use WASD keys to drive in remote control mode
 
-### Building (PlatformIO)
+## Usage
+
+The main control script is `wyzecar.sh` which provides all functionality:
+
 ```bash
-cd CubeOrangePlus
-pio run
+# Start in remote control mode (default)
+./wyzecar.sh
+
+# Start in autonomous follow mode
+./wyzecar.sh follow
+
+# Other commands
+./wyzecar.sh stop      # Stop WYZECAR
+./wyzecar.sh status    # Show system status
+./wyzecar.sh logs      # View live logs
+./wyzecar.sh update    # Pull latest from GitHub
+```
+
+## Hardware Setup
+
+### Components
+- **Platform**: Variscite DART-MX95 SoM (NXP i.MX 95)
+  - 6x Cortex-A55 @ 2.0GHz
+  - NPU for AI/ML acceleration
+- **Camera**: USB camera (V4L2 compatible)
+- **Motor Controller**: ESP32 with L298N driver
+- **Motors**: 2x DC motors (rear drive + front steering)
+- **Servo**: Standard RC servo for steering
+- **Communication**: I2C bus 3, address 0x42
+
+### Wiring
+
+#### I2C Connection (J6 Header on DART-MX95)
+| DART Pin | ESP32 Pin | Function |
+|----------|-----------|----------|
+| Pin 18 | GPIO22 | I2C3_SCL |
+| Pin 20 | GPIO21 | I2C3_SDA |
+| Pin 12 | GND | Ground |
+
+#### Motor Driver (L298N)
+| ESP32 Pin | L298N Pin | Function |
+|-----------|-----------|----------|
+| GPIO25 | ENA | Rear motor PWM |
+| GPIO26 | IN1 | Rear motor Dir A |
+| GPIO27 | IN2 | Rear motor Dir B |
+| GPIO14 | ENB | Front motor PWM |
+| GPIO12 | IN3 | Front motor Dir A |
+| GPIO13 | IN4 | Front motor Dir B |
+| GPIO33 | - | Servo PWM signal |
+
+## System Architecture
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Web Browser   │────▶│  Web Viewer Node │◀────│  Camera Node    │
+│   (WASD Keys)   │     │   (Port 8080)    │     │  (V4L2 @ 15fps) │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                               │                           │
+                               ▼                           ▼
+                        ┌──────────────────┐     ┌─────────────────┐
+                        │   Cmd_Vel Topic  │     │  Human Detector │
+                        │   (/cmd_vel)     │     │   (YOLOv8)      │
+                        └──────────────────┘     └─────────────────┘
+                               │                           │
+                               ▼                           ▼
+                        ┌──────────────────┐     ┌─────────────────┐
+                        │ Motor Controller │◀────│ Follower Node   │
+                        │  (I2C to ESP32)  │     │  (PID Control)  │
+                        └──────────────────┘     └─────────────────┘
+                               │
+                               ▼
+                        ┌──────────────────┐
+                        │      ESP32       │
+                        │  Motor Control   │
+                        └──────────────────┘
+```
+
+## Configuration
+
+Key parameters can be adjusted in the ROS2 launch:
+
+- **Camera**: 320x240 @ 15 FPS (optimized for DART-MX95)
+- **Detection**: YOLOv8n @ 416px input, processing every 2 frames
+- **Following**: Target distance 1.0m, max speed 0.5 m/s
+- **Steering**: Full deflection at ±1.0 rad/s angular velocity
+
+## Project Structure
+
+```
+WYZECAR/
+├── DartMX95/           # Main system directory
+│   ├── wyzecar.sh      # Main control script
+│   ├── ros2/           # ROS2 nodes (Python)
+│   │   ├── human_detector.py    # YOLOv8 person detection
+│   │   ├── follower.py          # PID following controller
+│   │   ├── motor_controller.py  # I2C motor commands
+│   │   └── web_viewer.py        # Web dashboard
+│   ├── src/            # ESP32 firmware (C++)
+│   │   └── main.cpp    # Motor control firmware
+│   ├── scripts/        # Support scripts
+│   ├── docker/         # Container configuration
+│   └── docs/           # Documentation
+│       ├── architecture.md
+│       ├── i2c_protocol.md
+│       └── wiring.md
+└── CubeOrangePlus/     # Alternative ArduRover config
+```
+
+## Operating Modes
+
+### Remote Control Mode (Default)
+- Control via web browser using WASD keys
+- Real-time camera feed with human detection overlay
+- Motor telemetry display
+- No automatic following
+
+### Autonomous Follow Mode
+- Car automatically follows detected humans
+- PID control maintains safe following distance (0.8-1.2m)
+- Smooth acceleration and deceleration
+- Falls back to remote control if no human detected
+
+## I2C Protocol
+
+Commands sent from DART to ESP32:
+
+| Command | Byte 0 | Byte 1 | Byte 2 | Byte 3 |
+|---------|--------|--------|--------|--------|
+| Set Motors | 0x01 | rear_speed | front_speed | servo_angle |
+| Emergency Stop | 0x02 | - | - | - |
+| Request Status | 0x03 | - | - | - |
+
+- Speeds: -100 to +100 (negative = reverse)
+- Servo angle: 0-180 degrees (90 = center)
+
+## Development
+
+### Building ESP32 Firmware
+```bash
+cd DartMX95
 pio run -t upload
 ```
 
-### GUI Motor Test
+### Building Docker Image
 ```bash
-cd CubeOrangePlus/gui
-pip install -r requirements.txt
-python motor_control.py
+cd DartMX95/docker
+docker build -t wyzecar:humble .
 ```
 
-## DartMX95 Configuration
+### Modifying ROS2 Nodes
+The ROS2 nodes are in Python and don't require compilation. Simply edit the files in `DartMX95/ros2/` and restart the system.
 
-Vision-based human tracking and following using ROS2.
+## Troubleshooting
 
-### Hardware
-- **SoM**: Variscite DART-MX95 (NXP i.MX 95)
-  - 6x Cortex-A55 @ 2.0GHz
-  - NPU for AI/ML acceleration
-- **Carrier**: Sonata board
-- **Camera**: CAM2C USB camera
-- **Motor Driver**: L298N dual H-bridge
-- **Motors**: Front + Rear DC motors
-- **Steering**: Servo (Ackermann style)
-
-### Software Stack
-- Host OS: Debian
-- Container: Docker with Ubuntu 22.04
-- Middleware: ROS2 Humble
-- Vision: YOLOv8-nano for human detection
-- Communication: I2C (DART ↔ ESP32)
-
-### ROS2 Nodes
-- `v4l2_camera` - Publishes camera images
-- `human_detector` - YOLOv8 detection, publishes target position
-- `follower` - PID controller for human following
-- `motor_controller` - Sends commands to ESP32 via I2C
-- `web_viewer` - Browser-based debug visualization
-
-## Project Structure
-```
-WYZECAR/
-├── CubeOrangePlus/
-│   ├── src/main.cpp           # ESP32 firmware
-│   ├── platformio.ini         # PlatformIO config
-│   ├── gui/                   # Python motor test GUI
-│   └── docs/                  # Wiring, ArduRover setup
-│
-└── DartMX95/
-    ├── README.md              # Setup guide
-    ├── platformio.ini         # ESP32 build config
-    ├── src/                   # ESP32 firmware
-    │   └── main.cpp
-    ├── ros2/                  # ROS2 Python nodes
-    │   ├── motor_controller.py
-    │   ├── human_detector.py
-    │   ├── follower.py
-    │   └── web_viewer.py
-    ├── docker/                # Docker config
-    │   └── Dockerfile
-    ├── scripts/               # Utility scripts
-    │   └── start_wyzecar.sh
-    └── docs/                  # Documentation
-        ├── wiring.md
-        ├── i2c_protocol.md
-        └── architecture.md
+### Camera Not Found
+```bash
+ls -la /dev/video*
+v4l2-ctl --list-devices
 ```
 
-## Wiring Overview
+### I2C Communication Issues
+```bash
+i2cdetect -y 3  # Should show device at 0x42
+i2cget -y 3 0x42 0x03  # Request status
+```
 
-### Power
-- Main battery (7-12V) powers L298N
-- L298N 5V regulator powers ESP32 and servo
-- Separate 5V BEC powers Cube Orange Plus
+### Container Not Starting
+```bash
+docker logs wyzecar
+docker ps -a
+```
 
-### Connections
-| ESP32 Pin | L298N Pin | Function |
-|-----------|-----------|----------|
-| GPIO25 | ENA | Motor 1 PWM |
-| GPIO26 | IN1 | Motor 1 Dir A |
-| GPIO27 | IN2 | Motor 1 Dir B |
-| GPIO12 | IN3 | Motor 2 Dir A |
-| GPIO13 | IN4 | Motor 2 Dir B |
-| GPIO14 | ENB | Motor 2 PWM |
-| GPIO34 | - | Cube throttle input |
+### Web Interface Issues
+- Chrome: Uses frame polling for compatibility
+- Safari: Uses native MJPEG streaming
+- Check browser console for errors
 
-See `CubeOrangePlus/WIRING.txt` for full diagrams.
+## Performance Tuning
+
+- Reduce camera resolution for higher FPS
+- Adjust YOLO processing frequency in `human_detector.py`
+- Tune PID parameters in `follower.py`
+- Modify acceleration rates in `motor_controller.py`
 
 ## License
 
-MIT
+MIT License - see LICENSE file for details
+
+## Acknowledgments
+
+- Built on ROS2 Humble and Ubuntu 22.04
+- YOLOv8 by Ultralytics for human detection
+- OpenCV for image processing
+- Variscite DART-MX95 platform

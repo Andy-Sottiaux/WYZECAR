@@ -140,9 +140,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         linear = -0.45  # Backward (still slightly slower than forward)
                     
                     if state['keys'].get('a'):
-                        angular = 0.8  # Turn left
+                        angular = 1.0  # Turn left (full deflection)
                     elif state['keys'].get('d'):
-                        angular = -0.8  # Turn right
+                        angular = -1.0  # Turn right (full deflection)
                     
                     state['cmd_vel'] = {'linear': linear, 'angular': angular}
                     state['cmd_vel_ts'] = time.time()
@@ -621,8 +621,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
 </html>'''
 
     def _stream_video(self):
-        """Stream video at ~20 FPS for responsive remote control."""
-        target_period_s = 1.0 / 20.0
+        """Stream video at ~15 FPS for responsive remote control."""
+        target_period_s = 1.0 / 15.0
         while True:
             try:
                 loop_start = time.time()

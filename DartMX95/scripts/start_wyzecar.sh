@@ -91,11 +91,12 @@ case "${1:-all}" in
     trap 'echo "[FATAL] start_wyzecar.sh failed at $(date -Iseconds). Last 60 lines of camera/detector/follower/motor/web logs:" >> "$LOGFILE"; \
           for f in "$CAMLOG" "$DETLOG" "$FOLLOG" "$MOTLOG" "$WEBLOG"; do echo "----- $f -----" >> "$LOGFILE"; tail -n 60 "$f" >> "$LOGFILE" || true; done' ERR
 
-    # Camera at 320x240 UYVY (MJPG not supported by v4l2_camera)
+    # Camera at 320x240 UYVY @ 15 FPS (optimized for performance)
     $STDBUF_CMD ros2 run v4l2_camera v4l2_camera_node --ros-args \
       -p video_device:=/dev/video13 \
       -p image_size:=[320,240] \
       -p pixel_format:=UYVY \
+      -p framerate:=15.0 \
       >> "$CAMLOG" 2>&1 &
     CAM_PID=$!
     echo "  ✓ Camera node (320x240)"

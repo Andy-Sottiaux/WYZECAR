@@ -1,5 +1,9 @@
-# PlatformIO build artifacts
+# PlatformIO
 .pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
 
 # Python
 __pycache__/
@@ -11,16 +15,38 @@ env/
 venv/
 .venv/
 
-# IDE settings
+# ROS2
+install/
+build/
+log/
+*.bag
+*.db3
+
+# IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 # Claude Code local settings
 .claude/settings.local.json
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Docker
+*.pid
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
 
 # Compiled files
 *.o
@@ -30,5 +56,6 @@ Thumbs.db
 *.map
 *.a
 *.dblite
-*.log
+
+# Other
 phntm_bridge_client/

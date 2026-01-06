@@ -145,9 +145,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     angular = 0.0
                     
                     if state['keys'].get('w'):
-                        linear = 1.0  # Forward (full speed)
+                        linear = 0.5  # Forward (half speed - matches max_linear_speed)
                     elif state['keys'].get('s'):
-                        linear = -1.0  # Backward (full speed)
+                        linear = -0.5  # Backward (half speed - matches max_linear_speed)
                     
                     if state['keys'].get('a'):
                         angular = -1.0  # Turn left (full deflection)

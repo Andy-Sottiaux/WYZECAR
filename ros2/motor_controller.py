@@ -41,7 +41,7 @@ class SmoothMotorController(Node):
         self.declare_parameter('esp32_address', 0x42)
         self.declare_parameter('max_speed_percent', 100)  # Full speed (no limit)
         self.declare_parameter('acceleration_rate', 40.0)  # % per second (quick ramp)
-        self.declare_parameter('deceleration_rate', 50.0)  # % per second (responsive braking)
+        self.declare_parameter('deceleration_rate', 300.0)  # % per second (very fast braking when key released)
         self.declare_parameter('servo_slew_rate', 120.0)  # degrees per second (responsive steering)
         # Throttle mapping / stiction compensation
         self.declare_parameter('max_linear_speed', 1.0)  # m/s - increased for full speed

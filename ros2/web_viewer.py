@@ -92,6 +92,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         elif self.path == '/stream':
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
@@ -179,11 +180,32 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
     
+    def do_HEAD(self):
+        """Handle HEAD requests (browser preflight/checks)."""
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+        elif self.path == '/stream':
+            self.send_response(200)
+            self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+        elif self.path == '/status':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+        else:
+            self.send_error(404)
+    
     def do_OPTIONS(self):
         """Handle CORS preflight."""
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'POST, GET, HEAD, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Content-Length', '0')
         self.send_header('Connection', 'close')

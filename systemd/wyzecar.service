@@ -11,7 +11,7 @@ WorkingDirectory=/root/WYZECAR
 Environment=IMAGE=wyzecar:humble
 Environment=I2C_DEVICE=/dev/i2c-3
 Environment=VIDEO_DEVICE=/dev/video13
-ExecStart=/bin/bash /root/WYZECAR/DartMX95/scripts/start_wyzecar_host.sh
+ExecStart=/root/WYZECAR/wyzecar.sh start
 Restart=on-failure
 RestartSec=2
 

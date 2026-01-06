@@ -29,8 +29,8 @@ log/
 *.swo
 *~
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code settings
+.claude/
 
 # OS
 .DS_Store

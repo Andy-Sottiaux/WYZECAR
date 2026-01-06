@@ -26,7 +26,7 @@ An autonomous RC car platform that uses computer vision for human detection and 
 
 3. **Start WYZECAR**:
    ```bash
-   cd /root/WYZECAR/DartMX95
+   cd /root/WYZECAR
    ./wyzecar.sh
    ```
 
@@ -124,21 +124,26 @@ Key parameters can be adjusted in the ROS2 launch:
 
 ```
 WYZECAR/
-├── DartMX95/           # Main system directory
-│   ├── wyzecar.sh      # Main control script
-│   ├── ros2/           # ROS2 nodes (Python)
-│   │   ├── human_detector.py    # YOLOv8 person detection
-│   │   ├── follower.py          # PID following controller
-│   │   ├── motor_controller.py  # I2C motor commands
-│   │   └── web_viewer.py        # Web dashboard
-│   ├── src/            # ESP32 firmware (C++)
-│   │   └── main.cpp    # Motor control firmware
-│   ├── scripts/        # Support scripts
-│   ├── docker/         # Container configuration
-│   └── docs/           # Documentation
-│       ├── architecture.md
-│       ├── i2c_protocol.md
-│       └── wiring.md
+├── wyzecar.sh          # Main control script
+├── ros2/               # ROS2 nodes (Python)
+│   ├── human_detector.py    # YOLOv8 person detection
+│   ├── follower.py          # PID following controller
+│   ├── motor_controller.py  # I2C motor commands
+│   └── web_viewer.py        # Web dashboard
+├── firmware/           # ESP32 firmware
+│   ├── platformio.ini  # Build configuration
+│   └── src/
+│       └── main.cpp    # Motor control firmware
+├── docker/             # Container configuration
+│   ├── Dockerfile      # ROS2 Humble container
+│   └── ros_entrypoint.sh
+├── systemd/            # System service
+│   └── wyzecar.service
+├── docs/               # Documentation
+│   ├── architecture.md
+│   ├── i2c_protocol.md
+│   ├── pinout.md
+│   └── wiring.md
 └── CubeOrangePlus/     # Alternative ArduRover config
 ```
 
@@ -173,18 +178,27 @@ Commands sent from DART to ESP32:
 
 ### Building ESP32 Firmware
 ```bash
-cd DartMX95
+cd firmware
 pio run -t upload
 ```
 
 ### Building Docker Image
 ```bash
-cd DartMX95/docker
+cd docker
 docker build -t wyzecar:humble .
 ```
 
 ### Modifying ROS2 Nodes
-The ROS2 nodes are in Python and don't require compilation. Simply edit the files in `DartMX95/ros2/` and restart the system.
+The ROS2 nodes are in Python and don't require compilation. Simply edit the files in `ros2/` and restart the system.
+
+### Installing Systemd Service
+To start WYZECAR automatically on boot:
+```bash
+sudo cp systemd/wyzecar.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable wyzecar.service
+sudo systemctl start wyzecar.service
+```
 
 ## Troubleshooting
 

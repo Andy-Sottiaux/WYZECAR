@@ -42,7 +42,7 @@ class SmoothMotorController(Node):
         self.declare_parameter('max_speed_percent', 35)  # 35% max speed
         self.declare_parameter('acceleration_rate', 40.0)  # % per second (quick ramp)
         self.declare_parameter('deceleration_rate', 300.0)  # % per second (very fast braking when key released)
-        self.declare_parameter('servo_slew_rate', 120.0)  # degrees per second (responsive steering)
+        self.declare_parameter('servo_slew_rate', 500.0)  # degrees per second (max speed steering)
         # Throttle mapping / stiction compensation
         self.declare_parameter('max_linear_speed', 0.35)  # m/s - 35% speed
         self.declare_parameter('throttle_expo', 0.75)  # <1 increases low-end authority (helps overcome stiction)
@@ -60,7 +60,7 @@ class SmoothMotorController(Node):
         self.declare_parameter('servo_max_angle', 180)
         # angular.z value that should correspond to full steering deflection.
         # If your controller sends smaller values (e.g. +/-0.8), reduce this to get full range.
-        self.declare_parameter('max_angular_speed', 1.0)
+        self.declare_parameter('max_angular_speed', 0.6)
         self.declare_parameter('command_timeout', 2.0)
         self.declare_parameter('control_rate', 50.0)  # Hz - higher rate for lower latency
         self.declare_parameter('velocity_smoothing', 0.3)  # Moderate smoothing

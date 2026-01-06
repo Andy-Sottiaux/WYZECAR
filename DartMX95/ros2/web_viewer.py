@@ -135,9 +135,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     angular = 0.0
                     
                     if state['keys'].get('w'):
-                        linear = 0.4  # Forward
+                        linear = 0.55  # Forward (a bit more authority for real motors)
                     elif state['keys'].get('s'):
-                        linear = -0.3  # Backward (slower)
+                        linear = -0.45  # Backward (still slightly slower than forward)
                     
                     if state['keys'].get('a'):
                         angular = 0.8  # Turn left

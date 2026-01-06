@@ -43,6 +43,22 @@ class SmoothMotorController(Node):
         self.declare_parameter('acceleration_rate', 40.0)  # % per second (quick ramp)
         self.declare_parameter('deceleration_rate', 50.0)  # % per second (responsive braking)
         self.declare_parameter('servo_slew_rate', 120.0)  # degrees per second (responsive steering)
+        # Throttle mapping / stiction compensation
+        self.declare_parameter('max_linear_speed', 0.5)  # m/s corresponding to max_speed_percent
+        self.declare_parameter('throttle_expo', 0.75)  # <1 increases low-end authority (helps overcome stiction)
+        self.declare_parameter('min_moving_speed_percent', 12)  # min commanded speed when nonzero (reduces PWM whine)
+        self.declare_parameter('startup_kick_enabled', True)
+        self.declare_parameter('startup_kick_percent', 18)  # brief initial kick to start turning
+        self.declare_parameter('startup_kick_duration', 0.18)  # seconds
+        # Steering mapping (cmd_vel angular.z -> servo angle)
+        # These defaults intentionally give more steering authority for manual WASD driving.
+        # If your linkage binds, reduce the range (e.g., min=45 max=135).
+        self.declare_parameter('servo_center_angle', 90)
+        self.declare_parameter('servo_min_angle', 30)
+        self.declare_parameter('servo_max_angle', 150)
+        # angular.z value that should correspond to full steering deflection.
+        # If your controller sends smaller values (e.g. +/-0.8), reduce this to get full range.
+        self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('command_timeout', 2.0)
         self.declare_parameter('control_rate', 25.0)  # Hz - smooth motion
         self.declare_parameter('velocity_smoothing', 0.3)  # Moderate smoothing
@@ -57,6 +73,16 @@ class SmoothMotorController(Node):
         self.accel_rate = self.get_parameter('acceleration_rate').get_parameter_value().double_value
         self.decel_rate = self.get_parameter('deceleration_rate').get_parameter_value().double_value
         self.servo_slew_rate = self.get_parameter('servo_slew_rate').get_parameter_value().double_value
+        self.max_linear_speed = float(self.get_parameter('max_linear_speed').get_parameter_value().double_value)
+        self.throttle_expo = float(self.get_parameter('throttle_expo').get_parameter_value().double_value)
+        self.min_moving_speed_percent = int(self.get_parameter('min_moving_speed_percent').get_parameter_value().integer_value)
+        self.startup_kick_enabled = bool(self.get_parameter('startup_kick_enabled').get_parameter_value().bool_value)
+        self.startup_kick_percent = int(self.get_parameter('startup_kick_percent').get_parameter_value().integer_value)
+        self.startup_kick_duration = float(self.get_parameter('startup_kick_duration').get_parameter_value().double_value)
+        self.servo_center = int(self.get_parameter('servo_center_angle').get_parameter_value().integer_value)
+        self.servo_min = int(self.get_parameter('servo_min_angle').get_parameter_value().integer_value)
+        self.servo_max = int(self.get_parameter('servo_max_angle').get_parameter_value().integer_value)
+        self.max_angular_speed = float(self.get_parameter('max_angular_speed').get_parameter_value().double_value)
         self.command_timeout = self.get_parameter('command_timeout').get_parameter_value().double_value
         self.control_rate = self.get_parameter('control_rate').get_parameter_value().double_value
         self.velocity_smoothing = self.get_parameter('velocity_smoothing').get_parameter_value().double_value
@@ -67,10 +93,44 @@ class SmoothMotorController(Node):
         # Motion state
         self.target_speed = 0.0  # Desired speed from commands
         self.current_speed = 0.0  # Actual ramped speed
-        self.target_servo = 90  # Desired servo angle
-        self.current_servo = 90.0  # Actual servo angle (float for smooth ramping)
+        # Validate steering params (keep safe, avoid weird inversion)
+        self.servo_center = max(0, min(180, self.servo_center))
+        self.servo_min = max(0, min(180, self.servo_min))
+        self.servo_max = max(0, min(180, self.servo_max))
+        if self.servo_min >= self.servo_max:
+            self.get_logger().warn(
+                f'Invalid steering limits (min={self.servo_min} >= max={self.servo_max}); falling back to 45..135'
+            )
+            self.servo_min = 45
+            self.servo_max = 135
+        if not (self.servo_min <= self.servo_center <= self.servo_max):
+            self.get_logger().warn(
+                f'Steering center {self.servo_center} not within [{self.servo_min},{self.servo_max}]; clamping'
+            )
+            self.servo_center = max(self.servo_min, min(self.servo_max, self.servo_center))
+        if self.max_angular_speed <= 1e-6:
+            self.get_logger().warn(f'max_angular_speed too small ({self.max_angular_speed}); using 1.0')
+            self.max_angular_speed = 1.0
+
+        # Validate throttle mapping params
+        if self.max_linear_speed <= 1e-6:
+            self.get_logger().warn(f'max_linear_speed too small ({self.max_linear_speed}); using 0.5')
+            self.max_linear_speed = 0.5
+        if not math.isfinite(self.throttle_expo) or self.throttle_expo <= 0.05:
+            self.get_logger().warn(f'Invalid throttle_expo ({self.throttle_expo}); using 0.75')
+            self.throttle_expo = 0.75
+        self.min_moving_speed_percent = max(0, min(100, self.min_moving_speed_percent))
+        self.startup_kick_percent = max(0, min(100, self.startup_kick_percent))
+        if not math.isfinite(self.startup_kick_duration) or self.startup_kick_duration < 0:
+            self.startup_kick_duration = 0.0
+
+        self.target_servo = self.servo_center  # Desired servo angle
+        self.current_servo = float(self.servo_center)  # Actual servo angle (float for smooth ramping)
         self.smoothed_linear = 0.0  # Smoothed input velocity
         self.smoothed_angular = 0.0
+        self.last_target_speed = 0.0
+        self.kick_until_time = 0.0
+        self.kick_sign = 1.0
         
         # Timing
         self.last_cmd_time = time.time()
@@ -107,6 +167,18 @@ class SmoothMotorController(Node):
         self.get_logger().info(f'  Acceleration: {self.accel_rate}%/s')
         self.get_logger().info(f'  Deceleration: {self.decel_rate}%/s')
         self.get_logger().info(f'  Servo slew: {self.servo_slew_rate}°/s')
+        self.get_logger().info(
+            f'  Throttle: max_linear_speed={self.max_linear_speed} m/s, expo={self.throttle_expo:.2f}, '
+            f'min_moving={self.min_moving_speed_percent}%'
+        )
+        if self.startup_kick_enabled and self.startup_kick_duration > 0 and self.startup_kick_percent > 0:
+            self.get_logger().info(
+                f'  Startup kick: {self.startup_kick_percent}% for {self.startup_kick_duration:.2f}s'
+            )
+        self.get_logger().info(
+            f'  Steering: center={self.servo_center}°, min={self.servo_min}°, max={self.servo_max}° '
+            f'(max_angular_speed={self.max_angular_speed})'
+        )
         self.get_logger().info(f'  Control rate: {self.control_rate} Hz')
         self.get_logger().info(f'  I2C keepalive: {self.i2c_keepalive_rate:.1f} Hz')
 
@@ -129,16 +201,41 @@ class SmoothMotorController(Node):
         self.smoothed_angular = alpha * msg.angular.z + (1 - alpha) * self.smoothed_angular
         
         # Convert smoothed velocity to target speed percentage
-        # Assuming max_linear_speed of 0.5 m/s maps to max_speed_percent
-        speed_ratio = min(1.0, abs(self.smoothed_linear) / 0.5)
-        self.target_speed = speed_ratio * self.max_speed_percent
+        # max_linear_speed maps to max_speed_percent
+        speed_ratio = min(1.0, abs(self.smoothed_linear) / float(self.max_linear_speed))
+        # Expo curve for better low-speed authority (helps overcome stiction)
+        speed_ratio = math.pow(speed_ratio, self.throttle_expo) if speed_ratio > 0 else 0.0
+        self.target_speed = speed_ratio * float(self.max_speed_percent)
         if self.smoothed_linear < 0:
             self.target_speed = -self.target_speed
+
+        # Enforce a minimum moving command when non-zero (reduces PWM whine below stall torque)
+        if self.min_moving_speed_percent > 0 and abs(self.target_speed) > 0.001:
+            if abs(self.target_speed) < float(self.min_moving_speed_percent):
+                self.target_speed = float(self.min_moving_speed_percent) * (1.0 if self.target_speed > 0 else -1.0)
         
-        # Convert angular to servo angle (90 = center, range 45-135)
-        # Assuming max_angular_speed of 1.0 rad/s
-        angular_ratio = max(-1.0, min(1.0, self.smoothed_angular / 1.0))
-        self.target_servo = 90 + int(angular_ratio * 45)
+        # Convert angular to servo angle
+        # angular_ratio in [-1, 1] where +/-1 is full steering deflection.
+        angular_ratio = max(-1.0, min(1.0, self.smoothed_angular / float(self.max_angular_speed)))
+        left_range = float(self.servo_center - self.servo_min)
+        right_range = float(self.servo_max - self.servo_center)
+        if angular_ratio < 0:
+            self.target_servo = int(round(self.servo_center + angular_ratio * left_range))
+        else:
+            self.target_servo = int(round(self.servo_center + angular_ratio * right_range))
+
+        # Startup kick: when going from stopped -> moving, apply a brief stronger initial command
+        if self.startup_kick_enabled and self.startup_kick_duration > 0 and self.startup_kick_percent > 0:
+            now = time.time()
+            was_stopped = abs(self.last_target_speed) < 0.001 and abs(self.current_speed) < 0.5
+            now_moving_cmd = abs(self.target_speed) >= 0.001
+            if was_stopped and now_moving_cmd:
+                self.kick_until_time = now + float(self.startup_kick_duration)
+                self.kick_sign = 1.0 if self.target_speed > 0 else -1.0
+            if not now_moving_cmd:
+                self.kick_until_time = 0.0
+
+        self.last_target_speed = float(self.target_speed)
 
     def control_loop(self):
         """Main control loop - runs at control_rate Hz."""
@@ -149,7 +246,7 @@ class SmoothMotorController(Node):
         # Check for command timeout - ramp down smoothly
         if now - self.last_cmd_time > self.command_timeout:
             self.target_speed = 0.0
-            self.target_servo = 90
+            self.target_servo = self.servo_center
         
         # Apply acceleration/deceleration ramping to speed
         self.current_speed = self._ramp_speed(
@@ -157,6 +254,17 @@ class SmoothMotorController(Node):
             self.target_speed, 
             dt
         )
+
+        # If we're trying to move, don't linger below stall torque: apply a brief kick.
+        if (
+            self.startup_kick_enabled
+            and now < self.kick_until_time
+            and abs(self.target_speed) > 0.001
+            and self.startup_kick_percent > 0
+        ):
+            kick = float(self.startup_kick_percent) * float(self.kick_sign)
+            if abs(self.current_speed) < abs(kick):
+                self.current_speed = kick
         
         # Apply slew rate limiting to servo
         self.current_servo = self._ramp_servo(
@@ -268,7 +376,7 @@ class SmoothMotorController(Node):
             try:
                 # Send stop command
                 self.i2c_bus_handle.write_i2c_block_data(
-                    self.esp32_address, 0x01, [0, 0, 90]
+                    self.esp32_address, 0x01, [0, 0, int(self.servo_center)]
                 )
             except Exception:
                 pass

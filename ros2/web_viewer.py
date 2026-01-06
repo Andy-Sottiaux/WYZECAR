@@ -150,9 +150,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         linear = -0.45  # Backward (still slightly slower than forward)
                     
                     if state['keys'].get('a'):
-                        angular = 1.0  # Turn left (full deflection)
+                        angular = -1.0  # Turn left (full deflection)
                     elif state['keys'].get('d'):
-                        angular = -1.0  # Turn right (full deflection)
+                        angular = 1.0  # Turn right (full deflection)
                     
                     state['cmd_vel'] = {'linear': linear, 'angular': angular}
                     state['cmd_vel_ts'] = time.time()

@@ -217,14 +217,18 @@ class SmoothMotorController(Node):
                 self.target_speed = float(self.min_moving_speed_percent) * (1.0 if self.target_speed > 0 else -1.0)
         
         # Convert angular to servo angle
+        # ESP32 firmware maps: 0°=1300us, 90°=1500us, 180°=1700us (1500 +/- 200)
+        # We need to use full 0-180 range to get full 1300-1700 PWM range
         # angular_ratio in [-1, 1] where +/-1 is full steering deflection.
         angular_ratio = max(-1.0, min(1.0, self.smoothed_angular / float(self.max_angular_speed)))
-        left_range = float(self.servo_center - self.servo_min)
-        right_range = float(self.servo_max - self.servo_center)
+        # Map to full servo range: 0-180 degrees
+        # This ensures we use the full ESP32 PWM range (1300-1700us)
         if angular_ratio < 0:
-            self.target_servo = int(round(self.servo_center + angular_ratio * left_range))
+            # Left: map [-1, 0] to [servo_min, servo_center]
+            self.target_servo = int(round(self.servo_center + angular_ratio * (self.servo_center - self.servo_min)))
         else:
-            self.target_servo = int(round(self.servo_center + angular_ratio * right_range))
+            # Right: map [0, 1] to [servo_center, servo_max]
+            self.target_servo = int(round(self.servo_center + angular_ratio * (self.servo_max - self.servo_center)))
 
         # Startup kick: when going from stopped -> moving, apply a brief stronger initial command
         if self.startup_kick_enabled and self.startup_kick_duration > 0 and self.startup_kick_percent > 0:
@@ -256,6 +260,11 @@ class SmoothMotorController(Node):
             self.target_speed, 
             dt
         )
+        
+        # Ensure motors fully stop (PWM = 0) when target is zero to prevent buzzing
+        # Use a small deadband to avoid PWM whine from very low values
+        if abs(self.target_speed) < 0.5:
+            self.current_speed = 0.0
 
         # If we're trying to move, don't linger below stall torque: apply a brief kick.
         if (
@@ -327,6 +336,9 @@ class SmoothMotorController(Node):
         
         # Clamp values
         speed_int = max(-100, min(100, speed_int))
+        # Ensure exactly 0 when stopped to prevent motor buzzing
+        if abs(speed_int) < 1:
+            speed_int = 0
         servo_int = max(0, min(180, servo_int))
         
         # ESP32 firmware watchdog requires periodic commands even if unchanged.

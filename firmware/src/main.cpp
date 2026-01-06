@@ -290,31 +290,40 @@ void processI2CData() {
 }
 
 void setMotorSpeed(int8_t rear, int8_t front) {
+  // Deadband: values near zero should be treated as zero to prevent buzzing
+  const int8_t MOTOR_DEADBAND = 1;  // ±1% treated as zero
+  
   // Rear motor (Motor A: ENA, IN1, IN2)
-  if (rear > 0) {
+  if (abs(rear) <= MOTOR_DEADBAND) {
+    // Fully stop motor to prevent buzzing
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, 0);
+  } else if (rear > 0) {
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
-  } else if (rear < 0) {
+    analogWrite(ENA, abs(rear) * 255 / 100);
+  } else {
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, HIGH);
-  } else {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
+    analogWrite(ENA, abs(rear) * 255 / 100);
   }
-  analogWrite(ENA, abs(rear) * 255 / 100);
   
   // Front motor (Motor B: ENB, IN3, IN4)
-  if (front > 0) {
+  if (abs(front) <= MOTOR_DEADBAND) {
+    // Fully stop motor to prevent buzzing
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, 0);
+  } else if (front > 0) {
     digitalWrite(IN3, HIGH);
     digitalWrite(IN4, LOW);
-  } else if (front < 0) {
-    digitalWrite(IN3, LOW);
-    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, abs(front) * 255 / 100);
   } else {
     digitalWrite(IN3, LOW);
-    digitalWrite(IN4, LOW);
+    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, abs(front) * 255 / 100);
   }
-  analogWrite(ENB, abs(front) * 255 / 100);
 }
 
 void stopMotors() {

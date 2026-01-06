@@ -600,8 +600,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             let speed = 0, turn = 0;
             if (keys.w) speed = 40;
             else if (keys.s) speed = -30;
-            if (keys.a) turn = 45;
-            else if (keys.d) turn = -45;
+            if (keys.a) turn = -45;
+            else if (keys.d) turn = 45;
             document.getElementById('speed-val').textContent = speed + '%';
             document.getElementById('turn-val').textContent = turn + '°';
         }

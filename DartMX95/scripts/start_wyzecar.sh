@@ -206,7 +206,8 @@ case "${1:-all}" in
     echo "║   WYZECAR - NO DETECTION (Debug Mode)      ║"
     echo "╚════════════════════════════════════════════╝"
     echo ""
-    DISABLE_DETECTION=1 exec $0 all
+    # Re-exec via bash so this works even if the script is not marked executable
+    DISABLE_DETECTION=1 exec bash "$0" all
     ;;
     
   remote)
@@ -219,7 +220,8 @@ case "${1:-all}" in
     echo "║   Human detection active (visual only)             ║"
     echo "╚════════════════════════════════════════════════════╝"
     echo ""
-    REMOTE_MODE=1 exec $0 all
+    # Re-exec via bash so this works even if the script is not marked executable
+    REMOTE_MODE=1 exec bash "$0" all
     ;;
     
   follower)

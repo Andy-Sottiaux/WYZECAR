@@ -56,7 +56,9 @@ RUN rosdep init 2>/dev/null || true
 WORKDIR ${WORKSPACE_DIR}
 
 # Entry point sets up ROS environment automatically
-COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
+# NOTE: This Dockerfile is typically built with context `DartMX95/docker`,
+# so `ros_entrypoint.sh` is in the root of the build context.
+COPY ros_entrypoint.sh /ros_entrypoint.sh
 RUN chmod +x /ros_entrypoint.sh
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["bash"]

@@ -97,17 +97,21 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         elif self.path == '/status':
             try:
                 json_data = self._get_status_json()
+                resp = json_data.encode('utf-8')
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
                 self.send_header('Pragma', 'no-cache')
                 self.send_header('Expires', '0')
+                self.send_header('Content-Length', str(len(resp)))
+                self.send_header('Connection', 'close')
                 self.end_headers()
-                self.wfile.write(json_data.encode())
+                self.wfile.write(resp)
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Content-type', 'text/plain')
+                self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(f'Error: {e}'.encode())
         else:

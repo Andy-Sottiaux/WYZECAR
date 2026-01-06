@@ -46,6 +46,9 @@ class SmoothMotorController(Node):
         self.declare_parameter('command_timeout', 2.0)
         self.declare_parameter('control_rate', 25.0)  # Hz - smooth motion
         self.declare_parameter('velocity_smoothing', 0.3)  # Moderate smoothing
+        # ESP32 expects periodic I2C commands; it has a ~2s watchdog.
+        # Keepalive ensures motors keep running even if command values are steady.
+        self.declare_parameter('i2c_keepalive_rate', 5.0)  # Hz (must be <10Hz I2C limiter)
         
         # Get parameters
         self.i2c_bus = self.get_parameter('i2c_bus').get_parameter_value().integer_value
@@ -57,6 +60,9 @@ class SmoothMotorController(Node):
         self.command_timeout = self.get_parameter('command_timeout').get_parameter_value().double_value
         self.control_rate = self.get_parameter('control_rate').get_parameter_value().double_value
         self.velocity_smoothing = self.get_parameter('velocity_smoothing').get_parameter_value().double_value
+        self.i2c_keepalive_rate = self.get_parameter('i2c_keepalive_rate').get_parameter_value().double_value
+        if self.i2c_keepalive_rate <= 0:
+            self.i2c_keepalive_rate = 5.0
         
         # Motion state
         self.target_speed = 0.0  # Desired speed from commands
@@ -102,6 +108,7 @@ class SmoothMotorController(Node):
         self.get_logger().info(f'  Deceleration: {self.decel_rate}%/s')
         self.get_logger().info(f'  Servo slew: {self.servo_slew_rate}°/s')
         self.get_logger().info(f'  Control rate: {self.control_rate} Hz')
+        self.get_logger().info(f'  I2C keepalive: {self.i2c_keepalive_rate:.1f} Hz')
 
     def _init_i2c(self):
         """Initialize I2C connection."""
@@ -212,13 +219,17 @@ class SmoothMotorController(Node):
         speed_int = max(-100, min(100, speed_int))
         servo_int = max(0, min(180, servo_int))
         
-        # Only send if values changed (reduce I2C traffic)
-        if speed_int == self.last_sent_speed and servo_int == self.last_sent_servo:
-            return
+        # ESP32 firmware watchdog requires periodic commands even if unchanged.
+        unchanged = (speed_int == self.last_sent_speed and servo_int == self.last_sent_servo)
         
         # Rate limit I2C to max 10 Hz
         now = time.time()
         if now - self.last_i2c_time < 0.1:
+            return
+
+        # If unchanged, only send at keepalive rate (<= 10 Hz).
+        keepalive_period = 1.0 / max(0.1, float(self.i2c_keepalive_rate))
+        if unchanged and (now - self.last_i2c_time) < keepalive_period:
             return
         
         # Convert signed speed to unsigned byte

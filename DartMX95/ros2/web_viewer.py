@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Advanced Web Dashboard for WYZECAR
+WYZECAR Remote Control Dashboard
 
-Real-time telemetry display:
-- Target position & velocity
-- Motor commands with visual bars
-- Controller state machine
-- System performance metrics
+Features:
+- WASD keyboard control for manual driving
+- Live video stream with high FPS
+- Human detection visualization (optional)
+- Real-time telemetry display
 
 Access at: http://<DART-IP>:8080
 """
@@ -24,28 +24,32 @@ import numpy as np
 import time
 import json
 
-# Global state with velocity tracking
+# Global state
 state_lock = threading.Lock()
 state = {
     'frame': None,
     'frame_ts': 0.0,
     'frame_source': 'none',
-    # Target tracking
+    # Target tracking (from human detector)
     'target': None,
     'target_ts': 0.0,
     'target_vx': 0.0,
     'target_vd': 0.0,
-    'prev_target': None,
-    'prev_target_ts': 0.0,
-    # Commands
+    # Commands (from keyboard)
     'cmd_vel': {'linear': 0, 'angular': 0},
     'cmd_vel_ts': 0.0,
+    # Keyboard control state
+    'keys': {'w': False, 's': False, 'a': False, 'd': False},
+    'manual_control': True,  # Manual mode by default
     # Metrics
     'detection_fps': 0.0,
     'cmd_rate': 0.0,
     'frame_count': 0,
     'cmd_count': 0,
 }
+
+# Global reference to ROS node for publishing
+ros_node = None
 
 
 class MJPEGHandler(BaseHTTPRequestHandler):
@@ -79,27 +83,97 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f'Error: {e}'.encode())
         else:
             self.send_error(404)
+    
+    def do_POST(self):
+        """Handle keyboard control commands."""
+        if self.path == '/cmd':
+            try:
+                content_length = int(self.headers['Content-Length'])
+                body = self.rfile.read(content_length).decode('utf-8')
+                data = json.loads(body)
+                
+                # Update key states
+                with state_lock:
+                    if 'keys' in data:
+                        state['keys'] = data['keys']
+                    
+                    # Calculate velocity from keys
+                    linear = 0.0
+                    angular = 0.0
+                    
+                    if state['keys'].get('w'):
+                        linear = 0.4  # Forward
+                    elif state['keys'].get('s'):
+                        linear = -0.3  # Backward (slower)
+                    
+                    if state['keys'].get('a'):
+                        angular = 0.8  # Turn left
+                    elif state['keys'].get('d'):
+                        angular = -0.8  # Turn right
+                    
+                    state['cmd_vel'] = {'linear': linear, 'angular': angular}
+                    state['cmd_vel_ts'] = time.time()
+                
+                # Publish to ROS
+                if ros_node:
+                    ros_node.publish_cmd_vel(linear, angular)
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'{{"error":"{e}"}}'.encode())
+        else:
+            self.send_error(404)
+    
+    def do_OPTIONS(self):
+        """Handle CORS preflight."""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
 
     def _get_html(self):
         return '''<!DOCTYPE html>
 <html>
 <head>
-    <title>WYZECAR Dashboard</title>
+    <title>WYZECAR Remote Control</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
-            background: #0a0a12;
+            background: linear-gradient(135deg, #0a0a12 0%, #1a1a2e 100%);
             color: #e0e0e0;
-            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-family: 'JetBrains Mono', 'SF Mono', monospace;
             min-height: 100vh;
-            padding: 15px;
+            padding: 20px;
         }
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            font-size: 1.8em;
+            background: linear-gradient(90deg, #00ff88, #00d4ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 5px;
+        }
+        .header .status {
+            font-size: 0.9em;
+            color: #666;
+        }
+        .header .status.connected { color: #00ff88; }
         .dashboard {
             display: grid;
-            grid-template-columns: 1fr 320px;
-            gap: 15px;
-            max-width: 1400px;
+            grid-template-columns: 1fr 280px;
+            gap: 20px;
+            max-width: 1200px;
             margin: 0 auto;
         }
         @media (max-width: 900px) {
@@ -108,83 +182,106 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         .video-section {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 15px;
         }
         .video-container {
-            background: #12121a;
-            border-radius: 8px;
+            background: #000;
+            border-radius: 12px;
             overflow: hidden;
-            border: 1px solid #2a2a3a;
+            border: 2px solid #2a2a4a;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
         }
         .video-container img {
             width: 100%;
             display: block;
         }
-        .state-bar {
-            display: flex;
-            gap: 10px;
-            padding: 10px;
+        
+        /* WASD Control Panel */
+        .controls {
             background: #12121a;
-            border-radius: 8px;
-            border: 1px solid #2a2a3a;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #2a2a4a;
+            text-align: center;
         }
-        .state-indicator {
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-size: 0.9em;
+        .controls-title {
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #666;
+            margin-bottom: 15px;
         }
-        .state-indicator.active {
-            background: #00ff88;
-            color: #000;
+        .wasd-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 60px);
+            grid-template-rows: repeat(2, 60px);
+            gap: 8px;
+            justify-content: center;
+            margin-bottom: 15px;
         }
-        .state-indicator.inactive {
+        .key {
+            width: 60px;
+            height: 60px;
             background: #1a1a2a;
-            color: #444;
+            border: 2px solid #3a3a5a;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #888;
+            transition: all 0.1s ease;
+            user-select: none;
         }
+        .key.active {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc66 100%);
+            border-color: #00ff88;
+            color: #000;
+            box-shadow: 0 0 20px rgba(0,255,136,0.5);
+            transform: scale(0.95);
+        }
+        .key.empty { visibility: hidden; }
+        .speed-display {
+            font-size: 1.2em;
+            margin-top: 10px;
+        }
+        .speed-display span { color: #00ff88; }
+        
+        /* Telemetry Panel */
         .telemetry {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 15px;
         }
         .panel {
             background: #12121a;
-            border-radius: 8px;
-            padding: 12px;
-            border: 1px solid #2a2a3a;
+            border-radius: 12px;
+            padding: 15px;
+            border: 1px solid #2a2a4a;
         }
         .panel-title {
             font-size: 0.75em;
             text-transform: uppercase;
             letter-spacing: 2px;
             color: #666;
-            margin-bottom: 10px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid #1a1a2a;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #2a2a4a;
         }
         .metric {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 4px 0;
+            padding: 6px 0;
         }
-        .metric-label {
-            color: #888;
-            font-size: 0.85em;
-        }
-        .metric-value {
-            font-weight: bold;
-            font-size: 0.95em;
-        }
+        .metric-label { color: #888; font-size: 0.85em; }
+        .metric-value { font-weight: bold; }
         .metric-value.positive { color: #00ff88; }
-        .metric-value.negative { color: #ff6b6b; }
-        .metric-value.neutral { color: #00d4ff; }
         .metric-value.warn { color: #ffaa00; }
         
         /* Command bars */
-        .cmd-bar-container {
-            margin: 8px 0;
-        }
+        .cmd-bar-container { margin: 10px 0; }
         .cmd-bar-label {
             display: flex;
             justify-content: space-between;
@@ -192,16 +289,16 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             margin-bottom: 4px;
         }
         .cmd-bar {
-            height: 20px;
+            height: 24px;
             background: #1a1a2a;
-            border-radius: 4px;
+            border-radius: 6px;
             position: relative;
             overflow: hidden;
         }
         .cmd-bar-fill {
             position: absolute;
             height: 100%;
-            transition: all 0.1s ease;
+            transition: all 0.05s ease;
         }
         .cmd-bar-fill.linear {
             background: linear-gradient(90deg, #00ff88, #00cc66);
@@ -218,150 +315,57 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             background: #444;
         }
         
-        /* Target visualization */
-        .target-viz {
-            height: 140px;
-            background: #0a0a12;
-            border-radius: 6px;
-            position: relative;
-            margin: 8px 0;
-        }
-        .target-grid {
-            position: absolute;
-            inset: 0;
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            grid-template-rows: repeat(3, 1fr);
-        }
-        .target-grid > div {
-            border: 1px solid #1a1a2a;
-        }
-        .target-dot {
-            position: absolute;
-            width: 20px;
-            height: 20px;
-            background: #00ff88;
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            box-shadow: 0 0 15px #00ff88;
-            transition: all 0.1s ease;
-        }
-        .target-velocity {
-            position: absolute;
-            width: 3px;
-            background: #ffaa00;
-            transform-origin: bottom center;
-        }
-        .target-center {
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            width: 30px;
-            height: 30px;
-            border: 2px solid #333;
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-        }
-        .no-target {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #444;
-            font-size: 0.9em;
-        }
-        
-        /* Distance zones */
-        .distance-bar {
-            height: 12px;
-            background: linear-gradient(90deg, #ff4444 0%, #ffaa00 30%, #00ff88 60%, #00d4ff 100%);
-            border-radius: 4px;
-            position: relative;
-            margin: 8px 0;
-        }
-        .distance-marker {
-            position: absolute;
-            top: -4px;
-            width: 4px;
-            height: 20px;
-            background: white;
-            border-radius: 2px;
-            transform: translateX(-50%);
-            box-shadow: 0 0 5px white;
-        }
-        .distance-labels {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.7em;
+        /* Instructions */
+        .instructions {
+            text-align: center;
             color: #666;
+            font-size: 0.85em;
+            padding: 10px;
+        }
+        .instructions kbd {
+            background: #2a2a4a;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin: 0 2px;
         }
     </style>
 </head>
 <body>
+    <div class="header">
+        <h1>WYZECAR</h1>
+        <div id="conn-status" class="status">Connecting...</div>
+    </div>
+    
     <div class="dashboard">
         <div class="video-section">
-            <div class="state-bar">
-                <div id="state-idle" class="state-indicator inactive">IDLE</div>
-                <div id="state-tracking" class="state-indicator inactive">TRACKING</div>
-                <div id="state-stopped" class="state-indicator inactive">STOPPED</div>
-                <div id="state-searching" class="state-indicator inactive">SEARCHING</div>
-            </div>
             <div class="video-container">
                 <img src="/stream" alt="Camera Feed" />
+            </div>
+            <div class="controls">
+                <div class="controls-title">Keyboard Control</div>
+                <div class="wasd-grid">
+                    <div class="key empty"></div>
+                    <div class="key" id="key-w">W</div>
+                    <div class="key empty"></div>
+                    <div class="key" id="key-a">A</div>
+                    <div class="key" id="key-s">S</div>
+                    <div class="key" id="key-d">D</div>
+                </div>
+                <div class="speed-display">
+                    Speed: <span id="speed-val">0%</span> | Turn: <span id="turn-val">0°</span>
+                </div>
+            </div>
+            <div class="instructions">
+                Click here first, then use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to drive
             </div>
         </div>
         
         <div class="telemetry">
             <div class="panel">
-                <div class="panel-title">Target Position</div>
-                <div class="target-viz">
-                    <div class="target-grid">
-                        <div></div><div></div><div></div>
-                        <div></div><div></div><div></div>
-                        <div></div><div></div><div></div>
-                    </div>
-                    <div class="target-center"></div>
-                    <div id="target-dot" class="target-dot" style="display:none;"></div>
-                    <div id="velocity-arrow" class="target-velocity" style="display:none;"></div>
-                    <div id="no-target" class="no-target">NO TARGET</div>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">X Position</span>
-                    <span id="pos-x" class="metric-value neutral">--</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">X Velocity</span>
-                    <span id="vel-x" class="metric-value neutral">--</span>
-                </div>
-            </div>
-            
-            <div class="panel">
-                <div class="panel-title">Distance</div>
-                <div class="distance-bar">
-                    <div id="dist-marker" class="distance-marker" style="left:50%;"></div>
-                </div>
-                <div class="distance-labels">
-                    <span>CLOSE</span>
-                    <span>STOP</span>
-                    <span>TARGET</span>
-                    <span>FAR</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Distance</span>
-                    <span id="distance" class="metric-value neutral">--</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Approach Rate</span>
-                    <span id="vel-d" class="metric-value neutral">--</span>
-                </div>
-            </div>
-            
-            <div class="panel">
-                <div class="panel-title">Motor Commands</div>
+                <div class="panel-title">Motor Output</div>
                 <div class="cmd-bar-container">
                     <div class="cmd-bar-label">
-                        <span>Linear (forward/back)</span>
+                        <span>Forward / Back</span>
                         <span id="cmd-linear-val">0.00</span>
                     </div>
                     <div class="cmd-bar">
@@ -371,7 +375,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 </div>
                 <div class="cmd-bar-container">
                     <div class="cmd-bar-label">
-                        <span>Angular (left/right)</span>
+                        <span>Left / Right</span>
                         <span id="cmd-angular-val">0.00</span>
                     </div>
                     <div class="cmd-bar">
@@ -382,167 +386,167 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             </div>
             
             <div class="panel">
+                <div class="panel-title">Human Detection</div>
+                <div class="metric">
+                    <span class="metric-label">Target</span>
+                    <span id="target-status" class="metric-value warn">None</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Distance</span>
+                    <span id="target-dist" class="metric-value">--</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Position X</span>
+                    <span id="target-x" class="metric-value">--</span>
+                </div>
+            </div>
+            
+            <div class="panel">
                 <div class="panel-title">System</div>
                 <div class="metric">
-                    <span class="metric-label">Detection FPS</span>
+                    <span class="metric-label">Video FPS</span>
                     <span id="det-fps" class="metric-value positive">--</span>
                 </div>
                 <div class="metric">
-                    <span class="metric-label">Command Rate</span>
+                    <span class="metric-label">Cmd Rate</span>
                     <span id="cmd-rate" class="metric-value positive">--</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Frame Age</span>
-                    <span id="frame-age" class="metric-value positive">--</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">Target Age</span>
-                    <span id="target-age" class="metric-value positive">--</span>
                 </div>
             </div>
         </div>
     </div>
     
     <script>
-        const STOP_DIST = 0.15;
-        const TARGET_DIST = 0.35;
+        // Keyboard state
+        const keys = { w: false, s: false, a: false, d: false };
+        let connected = false;
         
+        // Send commands to server
+        function sendCommand() {
+            fetch('/cmd', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ keys })
+            }).then(() => {
+                connected = true;
+                document.getElementById('conn-status').textContent = 'Connected';
+                document.getElementById('conn-status').className = 'status connected';
+            }).catch(() => {
+                connected = false;
+                document.getElementById('conn-status').textContent = 'Disconnected';
+                document.getElementById('conn-status').className = 'status';
+            });
+        }
+        
+        // Key handlers
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (keys.hasOwnProperty(key) && !keys[key]) {
+                keys[key] = true;
+                document.getElementById('key-' + key).classList.add('active');
+                sendCommand();
+                updateSpeedDisplay();
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (keys.hasOwnProperty(key)) {
+                keys[key] = false;
+                document.getElementById('key-' + key).classList.remove('active');
+                sendCommand();
+                updateSpeedDisplay();
+            }
+        });
+        
+        // Lose all keys on blur
+        window.addEventListener('blur', () => {
+            Object.keys(keys).forEach(k => {
+                keys[k] = false;
+                document.getElementById('key-' + k).classList.remove('active');
+            });
+            sendCommand();
+            updateSpeedDisplay();
+        });
+        
+        function updateSpeedDisplay() {
+            let speed = 0, turn = 0;
+            if (keys.w) speed = 40;
+            else if (keys.s) speed = -30;
+            if (keys.a) turn = 45;
+            else if (keys.d) turn = -45;
+            document.getElementById('speed-val').textContent = speed + '%';
+            document.getElementById('turn-val').textContent = turn + '°';
+        }
+        
+        // Status polling
         function updateStatus() {
             fetch('/status')
                 .then(r => r.json())
                 .then(data => {
-                    // State indicators
-                    const states = ['idle', 'tracking', 'stopped', 'searching'];
-                    let activeState = 'idle';
-                    
-                    if (data.target && data.target_age < 1.2) {
-                        if (data.target.distance <= STOP_DIST) {
-                            activeState = 'stopped';
-                        } else {
-                            activeState = 'tracking';
-                        }
-                    } else if (data.target_age < 6) {
-                        activeState = 'searching';
-                    }
-                    
-                    states.forEach(s => {
-                        const el = document.getElementById('state-' + s);
-                        el.className = 'state-indicator ' + (s === activeState ? 'active' : 'inactive');
-                    });
-                    
-                    // Target visualization
-                    const dot = document.getElementById('target-dot');
-                    const arrow = document.getElementById('velocity-arrow');
-                    const noTarget = document.getElementById('no-target');
-                    const viz = document.querySelector('.target-viz');
-                    
-                    if (data.target) {
-                        const x = (data.target.x + 1) / 2 * viz.offsetWidth;
-                        const y = data.target.distance * viz.offsetHeight;
-                        
-                        dot.style.left = x + 'px';
-                        dot.style.top = y + 'px';
-                        dot.style.display = 'block';
-                        noTarget.style.display = 'none';
-                        
-                        // Velocity arrow
-                        if (Math.abs(data.vx) > 0.05) {
-                            const len = Math.min(40, Math.abs(data.vx) * 30);
-                            const angle = data.vx > 0 ? 90 : -90;
-                            arrow.style.left = x + 'px';
-                            arrow.style.top = y + 'px';
-                            arrow.style.height = len + 'px';
-                            arrow.style.transform = 'rotate(' + angle + 'deg)';
-                            arrow.style.display = 'block';
-                        } else {
-                            arrow.style.display = 'none';
-                        }
-                        
-                        document.getElementById('pos-x').textContent = data.target.x.toFixed(2);
-                        document.getElementById('vel-x').textContent = (data.vx >= 0 ? '+' : '') + data.vx.toFixed(2);
-                        document.getElementById('distance').textContent = data.target.distance.toFixed(2);
-                        document.getElementById('vel-d').textContent = (data.vd >= 0 ? '+' : '') + data.vd.toFixed(2);
-                        
-                        // Distance marker
-                        document.getElementById('dist-marker').style.left = (data.target.distance * 100) + '%';
-                    } else {
-                        dot.style.display = 'none';
-                        arrow.style.display = 'none';
-                        noTarget.style.display = 'flex';
-                        document.getElementById('pos-x').textContent = '--';
-                        document.getElementById('vel-x').textContent = '--';
-                        document.getElementById('distance').textContent = '--';
-                        document.getElementById('vel-d').textContent = '--';
-                    }
-                    
-                    // Motor command bars
-                    const linearBar = document.getElementById('cmd-linear-bar');
-                    const angularBar = document.getElementById('cmd-angular-bar');
+                    // Motor bars
                     const linear = data.cmd_vel ? data.cmd_vel.linear : 0;
                     const angular = data.cmd_vel ? data.cmd_vel.angular : 0;
                     
                     document.getElementById('cmd-linear-val').textContent = linear.toFixed(2);
                     document.getElementById('cmd-angular-val').textContent = angular.toFixed(2);
                     
-                    // Linear bar (center = 0, left = back, right = forward)
-                    const linearPct = Math.abs(linear) / 0.7 * 50;
-                    if (linear >= 0) {
-                        linearBar.style.left = '50%';
-                        linearBar.style.width = linearPct + '%';
-                    } else {
-                        linearBar.style.left = (50 - linearPct) + '%';
-                        linearBar.style.width = linearPct + '%';
-                    }
+                    const linearBar = document.getElementById('cmd-linear-bar');
+                    const angularBar = document.getElementById('cmd-angular-bar');
                     
-                    // Angular bar (center = 0, left = left turn, right = right turn)
+                    const linearPct = Math.abs(linear) / 0.5 * 50;
+                    linearBar.style.left = linear >= 0 ? '50%' : (50 - linearPct) + '%';
+                    linearBar.style.width = linearPct + '%';
+                    
                     const angularPct = Math.abs(angular) / 1.0 * 50;
-                    if (angular >= 0) {
-                        angularBar.style.left = '50%';
-                        angularBar.style.width = angularPct + '%';
+                    angularBar.style.left = angular >= 0 ? '50%' : (50 - angularPct) + '%';
+                    angularBar.style.width = angularPct + '%';
+                    
+                    // Human detection
+                    if (data.target && data.target_age < 2) {
+                        document.getElementById('target-status').textContent = 'Detected';
+                        document.getElementById('target-status').className = 'metric-value positive';
+                        document.getElementById('target-dist').textContent = data.target.distance.toFixed(2) + 'm';
+                        document.getElementById('target-x').textContent = data.target.x.toFixed(2);
                     } else {
-                        angularBar.style.left = (50 - angularPct) + '%';
-                        angularBar.style.width = angularPct + '%';
+                        document.getElementById('target-status').textContent = 'None';
+                        document.getElementById('target-status').className = 'metric-value warn';
+                        document.getElementById('target-dist').textContent = '--';
+                        document.getElementById('target-x').textContent = '--';
                     }
                     
-                    // System metrics
+                    // System
                     document.getElementById('det-fps').textContent = data.detection_fps.toFixed(1) + ' Hz';
                     document.getElementById('cmd-rate').textContent = data.cmd_rate.toFixed(1) + ' Hz';
-                    document.getElementById('frame-age').textContent = data.frame_age.toFixed(2) + 's';
-                    document.getElementById('target-age').textContent = data.target_age.toFixed(2) + 's';
-                    
-                    // Color code ages
-                    const frameAgeEl = document.getElementById('frame-age');
-                    frameAgeEl.className = 'metric-value ' + (data.frame_age > 1 ? 'negative' : 'positive');
-                    
-                    const targetAgeEl = document.getElementById('target-age');
-                    targetAgeEl.className = 'metric-value ' + (data.target_age > 1.2 ? 'warn' : 'positive');
                 })
-                .catch(e => console.error(e));
+                .catch(console.error);
         }
         
         setInterval(updateStatus, 100);
+        setInterval(sendCommand, 100);  // Keep-alive commands
         updateStatus();
     </script>
 </body>
 </html>'''
 
     def _stream_video(self):
+        """Stream video at ~20 FPS for responsive remote control."""
         while True:
             try:
                 with state_lock:
                     if state['frame'] is not None:
                         frame = state['frame'].copy()
                     else:
-                        frame = np.zeros((240, 320, 3), dtype=np.uint8)
-                        cv2.putText(frame, "Waiting for camera...", (40, 120),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                        cv2.putText(frame, "Waiting for camera...", (200, 240),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                 
-                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                # Higher quality for remote driving
+                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 self.wfile.write(b'--frame\r\n')
                 self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
                 self.wfile.write(jpeg.tobytes())
                 self.wfile.write(b'\r\n')
-                time.sleep(0.08)
+                time.sleep(0.05)  # ~20 FPS
             except Exception:
                 break
 
@@ -566,6 +570,9 @@ class WebViewerNode(Node):
         super().__init__('web_viewer')
         self.bridge = CvBridge()
         
+        # Publishers - for keyboard control
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        
         # Subscriptions
         self.debug_sub = self.create_subscription(
             Image, '/debug_image', self.debug_callback, 10)
@@ -573,17 +580,31 @@ class WebViewerNode(Node):
             Image, '/image_raw', self.raw_callback, 10)
         self.target_sub = self.create_subscription(
             PointStamped, '/target_person', self.target_callback, 10)
-        self.cmd_vel_sub = self.create_subscription(
-            Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         
-        self.get_logger().info('Subscribed to: /debug_image, /image_raw, /target_person, /cmd_vel')
+        self.get_logger().info('Subscribed to: /debug_image, /image_raw, /target_person')
+        self.get_logger().info('Publishing to: /cmd_vel')
         
         self.has_debug = False
         self.frame_times = []
         self.cmd_times = []
         
-        self.get_logger().info('Advanced Web Dashboard - http://0.0.0.0:8080')
+        self.get_logger().info('WYZECAR Remote Control - http://0.0.0.0:8080')
+        self.get_logger().info('Use WASD keys to drive!')
         self.create_timer(0.5, self.update_metrics)
+    
+    def publish_cmd_vel(self, linear: float, angular: float):
+        """Publish velocity command from keyboard input."""
+        msg = Twist()
+        msg.linear.x = linear
+        msg.angular.z = angular
+        self.cmd_vel_pub.publish(msg)
+        
+        # Update state for display
+        with state_lock:
+            state['cmd_vel'] = {'linear': linear, 'angular': angular}
+            state['cmd_vel_ts'] = time.time()
+            state['cmd_count'] += 1
+            self.cmd_times.append(time.time())
 
     def debug_callback(self, msg):
         self.has_debug = True
@@ -627,35 +648,32 @@ class WebViewerNode(Node):
             }
             state['target_ts'] = now
 
-    def cmd_vel_callback(self, msg):
-        with state_lock:
-            state['cmd_vel'] = {
-                'linear': msg.linear.x,
-                'angular': msg.angular.z
-            }
-            state['cmd_vel_ts'] = time.time()
-            state['cmd_count'] += 1
-            self.cmd_times.append(time.time())
 
     def update_metrics(self):
         now = time.time()
         with state_lock:
             target_age = now - state['target_ts'] if state['target_ts'] > 0 else 999
+            cmd_age = now - state['cmd_vel_ts'] if state['cmd_vel_ts'] > 0 else 999
             
-            # Log subscription status periodically
+            # Log status periodically
+            linear = state['cmd_vel']['linear']
+            angular = state['cmd_vel']['angular']
             self.get_logger().info(
-                f'[STATUS] frames={state["frame_count"]} cmds={state["cmd_count"]} '
-                f'target_age={target_age:.1f}s'
+                f'[CTRL] Speed={linear:.2f} Turn={angular:.2f} | '
+                f'Frames={state["frame_count"]} Cmds={state["cmd_count"]}'
             )
             
-            # Clear stale data
-            if target_age > 1.5:
+            # Clear stale target data
+            if target_age > 2.0:
                 state['target'] = None
                 state['target_vx'] = 0.0
                 state['target_vd'] = 0.0
             
-            if now - state['cmd_vel_ts'] > 1.0:
+            # Stop motors if no commands for 0.5s
+            if cmd_age > 0.5:
                 state['cmd_vel'] = {'linear': 0, 'angular': 0}
+                # Send stop command
+                self.publish_cmd_vel(0.0, 0.0)
             
             # Calculate rates
             self.frame_times = [t for t in self.frame_times if now - t < 2.0]
@@ -666,17 +684,26 @@ class WebViewerNode(Node):
 
 
 def main():
+    global ros_node
+    
     rclpy.init()
     node = WebViewerNode()
+    ros_node = node  # Set global reference for HTTP handler
     
     server = HTTPServer(('0.0.0.0', 8080), MJPEGHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     
-    print("\n" + "="*50)
-    print("  WYZECAR Advanced Dashboard")
+    print("\n" + "="*60)
+    print("  WYZECAR Remote Control")
     print("  http://<DART-IP>:8080")
-    print("="*50 + "\n")
+    print("")
+    print("  Controls:")
+    print("    W - Forward")
+    print("    S - Backward")
+    print("    A - Turn Left")
+    print("    D - Turn Right")
+    print("="*60 + "\n")
     
     try:
         rclpy.spin(node)
@@ -689,3 +716,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

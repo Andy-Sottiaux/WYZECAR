@@ -38,10 +38,13 @@ source /workspace/wyzecar_ws/install/setup.bash 2>/dev/null || true
 print_banner() {
     echo ""
     echo "╔════════════════════════════════════════════╗"
-    echo "║     WYZECAR Human Following System         ║"
+    echo "║          WYZECAR Control System            ║"
     echo "╚════════════════════════════════════════════╝"
     echo ""
 }
+
+# Mode flag for remote control (no follower)
+REMOTE_MODE="${REMOTE_MODE:-0}"
 
 # Check what to do
 case "${1:-all}" in
@@ -125,14 +128,20 @@ case "${1:-all}" in
       exit 1
     fi
     
-    $STDBUF_CMD ros2 run wyzecar_vision follower \
-      >> "$FOLLOG" 2>&1 &
-    FOL_PID=$!
-    echo "  ✓ Follower controller"
-    sleep 1
-    if ! kill -0 "$FOL_PID" 2>/dev/null; then
-      echo "[FATAL] Follower exited immediately. See $FOLLOG" >> "$LOGFILE"
-      exit 1
+    # Only start follower in automatic mode (not remote control)
+    FOL_PID=""
+    if [ "${REMOTE_MODE:-0}" = "0" ]; then
+      $STDBUF_CMD ros2 run wyzecar_vision follower \
+        >> "$FOLLOG" 2>&1 &
+      FOL_PID=$!
+      echo "  ✓ Follower controller (auto-follow)"
+      sleep 1
+      if ! kill -0 "$FOL_PID" 2>/dev/null; then
+        echo "[FATAL] Follower exited immediately. See $FOLLOG" >> "$LOGFILE"
+        exit 1
+      fi
+    else
+      echo "  ⏭ Follower SKIPPED (remote control mode)"
     fi
     
     $STDBUF_CMD ros2 run wyzecar_control motor_controller --ros-args \
@@ -148,12 +157,22 @@ case "${1:-all}" in
     fi
     
     echo ""
-    echo "════════════════════════════════════════════"
-    echo "  All nodes running!"
-    echo "  Open: http://192.168.5.183:8080"
+    echo "════════════════════════════════════════════════"
+    if [ "${REMOTE_MODE:-0}" = "1" ]; then
+      echo "  🎮 REMOTE CONTROL MODE"
+      echo ""
+      echo "  Open: http://192.168.5.183:8080"
+      echo "  Use WASD keys to drive!"
+    else
+      echo "  🤖 AUTOMATIC FOLLOW MODE"
+      echo ""
+      echo "  Open: http://192.168.5.183:8080"
+      echo "  Car will follow detected humans"
+    fi
+    echo ""
     echo "  Logs: tail -f $RUNLOGDIR/*.log"
     echo "  Press Ctrl+C to stop"
-    echo "════════════════════════════════════════════"
+    echo "════════════════════════════════════════════════"
     echo ""
     
     # Web viewer in foreground (if it exits, we want the reason in WEBLOG)
@@ -162,7 +181,8 @@ case "${1:-all}" in
     # Cleanup on exit
     echo ""
     echo "Stopping all nodes..."
-    kill "$CAM_PID" "$DET_PID" "$FOL_PID" "$MOT_PID" 2>/dev/null || true
+    kill "$CAM_PID" "$DET_PID" "$MOT_PID" 2>/dev/null || true
+    [ -n "$FOL_PID" ] && kill "$FOL_PID" 2>/dev/null || true
     pkill -f "ros2 run" 2>/dev/null || true
     echo "Done. Full logs saved to: $RUNLOGDIR"
     ;;
@@ -183,6 +203,19 @@ case "${1:-all}" in
     echo "╚════════════════════════════════════════════╝"
     echo ""
     DISABLE_DETECTION=1 exec $0 all
+    ;;
+    
+  remote)
+    # Remote control mode - WASD driving, no automatic following
+    echo ""
+    echo "╔════════════════════════════════════════════════════╗"
+    echo "║   WYZECAR - REMOTE CONTROL MODE                    ║"
+    echo "║                                                    ║"
+    echo "║   Use WASD keys in web browser to drive!           ║"
+    echo "║   Human detection active (visual only)             ║"
+    echo "╚════════════════════════════════════════════════════╝"
+    echo ""
+    REMOTE_MODE=1 exec $0 all
     ;;
     
   follower)
@@ -217,23 +250,24 @@ case "${1:-all}" in
     
   *)
     print_banner
-    echo "Usage: $0 {all|nodetect|build|status|logs|camera|detector|follower|motor|web}"
+    echo "Usage: $0 {remote|all|nodetect|build|status|logs|...}"
     echo ""
-    echo "  all      - Start everything (recommended)"
-    echo "  nodetect - Start everything but DISABLE detection (test video feed)"
+    echo "Main modes:"
+    echo "  remote   - 🎮 WASD remote control (recommended for driving)"
+    echo "  all      - 🤖 Automatic human following mode"
+    echo "  nodetect - Debug mode (no detection, video only)"
+    echo ""
+    echo "Utilities:"
     echo "  build    - Build the ROS2 workspace"
     echo "  status   - Show running nodes and topic rates"
     echo "  logs     - Tail the log file"
     echo ""
     echo "Individual nodes (for debugging):"
-    echo "  camera   - Camera only (verbose)"
-    echo "  detector - Human detector only (YOLOv8)"
-    echo "  follower - Follower only (verbose)"
-    echo "  motor    - Motor controller only (verbose)"
+    echo "  camera   - Camera only"
+    echo "  detector - Human detector (YOLOv8)"
+    echo "  follower - Follower controller"
+    echo "  motor    - Motor controller"
     echo "  web      - Web viewer only"
-    echo ""
-    echo "Environment variables:"
-    echo "  DISABLE_DETECTION=1 - Disable person detection (passthrough mode)"
     ;;
 esac
 

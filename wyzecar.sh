@@ -79,7 +79,10 @@ check_root() {
 
 # Include the container startup logic
 source_ros() {
+    # Temporarily disable strict mode for ROS sourcing
+    set +u
     source /opt/ros/humble/setup.bash
+    set -u
     source /workspace/wyzecar_ws/install/setup.bash 2>/dev/null || true
 }
 

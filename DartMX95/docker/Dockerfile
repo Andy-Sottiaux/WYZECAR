@@ -56,7 +56,7 @@ RUN rosdep init 2>/dev/null || true
 WORKDIR ${WORKSPACE_DIR}
 
 # Entry point sets up ROS environment automatically
-COPY ros_entrypoint.sh /ros_entrypoint.sh
+COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
 RUN chmod +x /ros_entrypoint.sh
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["bash"]

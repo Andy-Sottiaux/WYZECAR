@@ -78,21 +78,26 @@ class MJPEGHandler(BaseHTTPRequestHandler):
     
     def do_GET(self):
         if self.path == '/':
+            html = self._get_html().encode('utf-8')
             self.send_response(200)
-            self.send_header('Content-type', 'text/html')
+            self.send_header('Content-type', 'text/html; charset=utf-8')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
+            self.send_header('Content-Length', str(len(html)))
+            self.send_header('Connection', 'close')
             self.end_headers()
-            self.wfile.write(self._get_html().encode())
+            self.wfile.write(html)
+            self.close_connection = True
         elif self.path == '/stream':
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
-            self.send_header('Connection', 'close')
+            self.send_header('Connection', 'keep-alive')
             self.end_headers()
+            self.close_connection = False
             self._stream_video()
         elif self.path == '/status':
             try:
@@ -108,6 +113,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(resp)
+                self.close_connection = True
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Content-type', 'text/plain')

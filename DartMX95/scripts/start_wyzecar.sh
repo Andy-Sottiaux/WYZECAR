@@ -101,7 +101,8 @@ case "${1:-all}" in
     echo "  ✓ Camera node (320x240)"
     sleep 2
     if ! kill -0 "$CAM_PID" 2>/dev/null; then
-      echo "[FATAL] Camera node exited immediately. See $CAMLOG" >> "$LOGFILE"
+      echo "[FATAL] Camera node exited! Check log:"
+      tail -20 "$CAMLOG"
       exit 1
     fi
     
@@ -112,7 +113,7 @@ case "${1:-all}" in
       DETECT_DISABLE_FLAG="-p disable_detection:=true"
       echo "  ⚠ DETECTION DISABLED (passthrough mode)"
     fi
-    $STDBUF_CMD ros2 run wyzecar_vision human_detector --ros-args \
+    $STDBUF_CMD python3 /workspace/DartMX95/ros2/human_detector.py --ros-args \
       -p process_every_n_frames:=2 \
       -p input_size:=416 \
       -p confidence_threshold:=0.45 \
@@ -124,27 +125,29 @@ case "${1:-all}" in
     fi
     sleep 5
     if ! kill -0 "$DET_PID" 2>/dev/null; then
-      echo "[FATAL] Human detector exited immediately. See $DETLOG" >> "$LOGFILE"
+      echo "[FATAL] Human detector exited! Check log:"
+      tail -20 "$DETLOG"
       exit 1
     fi
     
     # Only start follower in automatic mode (not remote control)
     FOL_PID=""
     if [ "${REMOTE_MODE:-0}" = "0" ]; then
-      $STDBUF_CMD ros2 run wyzecar_vision follower \
+      $STDBUF_CMD python3 /workspace/DartMX95/ros2/follower.py \
         >> "$FOLLOG" 2>&1 &
       FOL_PID=$!
       echo "  ✓ Follower controller (auto-follow)"
       sleep 1
       if ! kill -0 "$FOL_PID" 2>/dev/null; then
-        echo "[FATAL] Follower exited immediately. See $FOLLOG" >> "$LOGFILE"
+        echo "[FATAL] Follower exited! Check log:"
+        tail -20 "$FOLLOG"
         exit 1
       fi
     else
       echo "  ⏭ Follower SKIPPED (remote control mode)"
     fi
     
-    $STDBUF_CMD ros2 run wyzecar_control motor_controller --ros-args \
+    $STDBUF_CMD python3 /workspace/DartMX95/ros2/motor_controller.py --ros-args \
       -p i2c_bus:=3 \
       -p command_timeout:=9999.0 \
       >> "$MOTLOG" 2>&1 &
@@ -152,7 +155,8 @@ case "${1:-all}" in
     echo "  ✓ Motor controller"
     sleep 1
     if ! kill -0 "$MOT_PID" 2>/dev/null; then
-      echo "[FATAL] Motor controller exited immediately. See $MOTLOG" >> "$LOGFILE"
+      echo "[FATAL] Motor controller exited! Check log:"
+      tail -20 "$MOTLOG"
       exit 1
     fi
     
@@ -192,7 +196,7 @@ case "${1:-all}" in
     ;;
     
   detector)
-    ros2 run wyzecar_vision human_detector
+    python3 /workspace/DartMX95/ros2/human_detector.py
     ;;
     
   nodetect)
@@ -219,11 +223,11 @@ case "${1:-all}" in
     ;;
     
   follower)
-    ros2 run wyzecar_vision follower
+    python3 /workspace/DartMX95/ros2/follower.py
     ;;
     
   motor)
-    ros2 run wyzecar_control motor_controller --ros-args -p i2c_bus:=3 -p command_timeout:=9999.0
+    python3 /workspace/DartMX95/ros2/motor_controller.py --ros-args -p i2c_bus:=3 -p command_timeout:=9999.0
     ;;
     
   web)

@@ -217,8 +217,8 @@ class SmoothMotorController(Node):
                 self.target_speed = float(self.min_moving_speed_percent) * (1.0 if self.target_speed > 0 else -1.0)
         
         # Convert angular to servo angle
-        # ESP32 firmware maps: 0°=1300us, 90°=1500us, 180°=1700us (1500 +/- 200)
-        # We need to use full 0-180 range to get full 1300-1700 PWM range
+        # ESP32 firmware maps: 0°=1200us, 90°=1500us, 180°=1800us (1500 +/- 300)
+        # We need to use full 0-180 range to get full 1200-1800 PWM range
         # angular_ratio in [-1, 1] where +/-1 is full steering deflection.
         angular_ratio = max(-1.0, min(1.0, self.smoothed_angular / float(self.max_angular_speed)))
         # Map to full servo range: 0-180 degrees

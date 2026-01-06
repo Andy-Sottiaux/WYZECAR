@@ -51,11 +51,13 @@ class SmoothMotorController(Node):
         self.declare_parameter('startup_kick_percent', 18)  # brief initial kick to start turning
         self.declare_parameter('startup_kick_duration', 0.18)  # seconds
         # Steering mapping (cmd_vel angular.z -> servo angle)
-        # These defaults intentionally give more steering authority for manual WASD driving.
-        # If your linkage binds, reduce the range (e.g., min=45 max=135).
+        # IMPORTANT: These defaults are aligned with the ESP32 firmware:
+        # - Firmware clamps commanded servoAngle to [0..180]
+        # - Firmware maps 0..180 to a safe PWM range (SERVO_MIN_US..SERVO_MAX_US)
+        # If your physical linkage binds before full lock, narrow these limits via params.
         self.declare_parameter('servo_center_angle', 90)
-        self.declare_parameter('servo_min_angle', 30)
-        self.declare_parameter('servo_max_angle', 150)
+        self.declare_parameter('servo_min_angle', 0)
+        self.declare_parameter('servo_max_angle', 180)
         # angular.z value that should correspond to full steering deflection.
         # If your controller sends smaller values (e.g. +/-0.8), reduce this to get full range.
         self.declare_parameter('max_angular_speed', 1.0)

@@ -19,10 +19,28 @@ from std_msgs.msg import String
 from cv_bridge import CvBridge
 import cv2
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
 import numpy as np
 import time
 import json
+
+try:
+    # Python 3.7+
+    from http.server import ThreadingHTTPServer as _ThreadingHTTPServer
+except Exception:  # pragma: no cover
+    _ThreadingHTTPServer = None
+
+if _ThreadingHTTPServer is None:  # pragma: no cover
+    import socketserver
+
+    class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+else:
+
+    class ThreadingHTTPServer(_ThreadingHTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
 
 # Global state
 state_lock = threading.Lock()
@@ -53,6 +71,8 @@ ros_node = None
 
 
 class MJPEGHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, format, *args):
         pass
     
@@ -61,11 +81,17 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
             self.end_headers()
             self.wfile.write(self._get_html().encode())
         elif self.path == '/stream':
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
+            self.send_header('Connection', 'close')
             self.end_headers()
             self._stream_video()
         elif self.path == '/status':
@@ -74,6 +100,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
                 self.end_headers()
                 self.wfile.write(json_data.encode())
             except Exception as e:
@@ -118,15 +147,25 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 if ros_node:
                     ros_node.publish_cmd_vel(linear, angular)
                 
+                resp = b'{"ok":true}'
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                self.send_header('Content-Length', str(len(resp)))
+                self.send_header('Connection', 'close')
                 self.end_headers()
-                self.wfile.write(b'{"ok":true}')
+                self.wfile.write(resp)
             except Exception as e:
+                resp = json.dumps({"error": str(e)}).encode("utf-8")
                 self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Content-Length', str(len(resp)))
+                self.send_header('Connection', 'close')
                 self.end_headers()
-                self.wfile.write(f'{{"error":"{e}"}}'.encode())
+                self.wfile.write(resp)
         else:
             self.send_error(404)
     
@@ -136,6 +175,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Content-Length', '0')
+        self.send_header('Connection', 'close')
         self.end_headers()
 
     def _get_html(self):
@@ -330,7 +371,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         }
     </style>
 </head>
-<body>
+<body tabindex="0">
     <div class="header">
         <h1>WYZECAR</h1>
         <div id="conn-status" class="status">Connecting...</div>
@@ -355,8 +396,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     Speed: <span id="speed-val">0%</span> | Turn: <span id="turn-val">0°</span>
                 </div>
             </div>
-            <div class="instructions">
-                Click here first, then use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to drive
+            <div class="instructions" id="kb-hint">
+                Click anywhere on this page to enable driving, then use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
             </div>
         </div>
         
@@ -419,9 +460,15 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         // Keyboard state
         const keys = { w: false, s: false, a: false, d: false };
         let connected = false;
+        let hasFocus = false;
+        let lastSendMs = 0;
+        const SEND_MIN_INTERVAL_MS = 50; // 20Hz max
         
         // Send commands to server
         function sendCommand() {
+            const now = performance.now();
+            if (now - lastSendMs < SEND_MIN_INTERVAL_MS) return;
+            lastSendMs = now;
             fetch('/cmd', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -438,24 +485,65 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         }
         
         // Key handlers
+        function setHint(text) {
+            const el = document.getElementById('kb-hint');
+            if (el) el.textContent = text;
+        }
+
+        function focusForDriving() {
+            // Chrome often needs a focused element for consistent key events.
+            document.body.focus();
+        }
+
+        function keyToControl(k) {
+            if (!k) return null;
+            const key = k.toLowerCase();
+            if (!Object.prototype.hasOwnProperty.call(keys, key)) return null;
+            return key;
+        }
+
         document.addEventListener('keydown', (e) => {
-            const key = e.key.toLowerCase();
-            if (keys.hasOwnProperty(key) && !keys[key]) {
+            // Don’t steal keys while typing somewhere else (future-proofing).
+            const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+            const key = keyToControl(e.key);
+            if (!key) return;
+
+            // Prevent scroll/quickfind behaviors in some browsers.
+            e.preventDefault();
+
+            if (!keys[key]) {
                 keys[key] = true;
                 document.getElementById('key-' + key).classList.add('active');
                 sendCommand();
                 updateSpeedDisplay();
             }
-        });
+        }, { passive: false });
         
         document.addEventListener('keyup', (e) => {
-            const key = e.key.toLowerCase();
-            if (keys.hasOwnProperty(key)) {
-                keys[key] = false;
-                document.getElementById('key-' + key).classList.remove('active');
-                sendCommand();
-                updateSpeedDisplay();
-            }
+            const key = keyToControl(e.key);
+            if (!key) return;
+            e.preventDefault();
+            keys[key] = false;
+            document.getElementById('key-' + key).classList.remove('active');
+            sendCommand();
+            updateSpeedDisplay();
+        }, { passive: false });
+
+        // Click-to-focus (important for Chrome)
+        document.addEventListener('pointerdown', () => {
+            focusForDriving();
+        });
+
+        window.addEventListener('focus', () => {
+            hasFocus = true;
+            setHint('Driving enabled — use W A S D');
+        });
+
+        window.addEventListener('blur', () => {
+            hasFocus = false;
+            setHint('Click anywhere on this page to enable driving, then use W A S D');
         });
         
         // Lose all keys on blur
@@ -522,7 +610,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
         }
         
         setInterval(updateStatus, 100);
-        setInterval(sendCommand, 100);  // Keep-alive commands
+        setInterval(sendCommand, 100);  // Keep-alive commands (10Hz)
         updateStatus();
     </script>
 </body>
@@ -530,8 +618,10 @@ class MJPEGHandler(BaseHTTPRequestHandler):
 
     def _stream_video(self):
         """Stream video at ~20 FPS for responsive remote control."""
+        target_period_s = 1.0 / 20.0
         while True:
             try:
+                loop_start = time.time()
                 with state_lock:
                     if state['frame'] is not None:
                         frame = state['frame'].copy()
@@ -546,7 +636,16 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
                 self.wfile.write(jpeg.tobytes())
                 self.wfile.write(b'\r\n')
-                time.sleep(0.05)  # ~20 FPS
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+                # ~20 FPS (account for encode + send time)
+                elapsed = time.time() - loop_start
+                sleep_s = target_period_s - elapsed
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
             except Exception:
                 break
 
@@ -651,6 +750,7 @@ class WebViewerNode(Node):
 
     def update_metrics(self):
         now = time.time()
+        should_publish_stop = False
         with state_lock:
             target_age = now - state['target_ts'] if state['target_ts'] > 0 else 999
             cmd_age = now - state['cmd_vel_ts'] if state['cmd_vel_ts'] > 0 else 999
@@ -671,9 +771,10 @@ class WebViewerNode(Node):
             
             # Stop motors if no commands for 0.5s
             if cmd_age > 0.5:
-                state['cmd_vel'] = {'linear': 0, 'angular': 0}
-                # Send stop command
-                self.publish_cmd_vel(0.0, 0.0)
+                # Avoid deadlock: do NOT publish while holding state_lock.
+                if state['cmd_vel'].get('linear', 0) != 0 or state['cmd_vel'].get('angular', 0) != 0:
+                    state['cmd_vel'] = {'linear': 0, 'angular': 0}
+                    should_publish_stop = True
             
             # Calculate rates
             self.frame_times = [t for t in self.frame_times if now - t < 2.0]
@@ -681,6 +782,9 @@ class WebViewerNode(Node):
             
             state['detection_fps'] = len(self.frame_times) / 2.0 if self.frame_times else 0
             state['cmd_rate'] = len(self.cmd_times) / 2.0 if self.cmd_times else 0
+
+        if should_publish_stop:
+            self.publish_cmd_vel(0.0, 0.0)
 
 
 def main():
@@ -690,7 +794,9 @@ def main():
     node = WebViewerNode()
     ros_node = node  # Set global reference for HTTP handler
     
-    server = HTTPServer(('0.0.0.0', 8080), MJPEGHandler)
+    # Threaded server is required: /stream is a long-lived response; without threading
+    # it will block /cmd and /status for most browsers (notably Chrome).
+    server = ThreadingHTTPServer(('0.0.0.0', 8080), MJPEGHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     

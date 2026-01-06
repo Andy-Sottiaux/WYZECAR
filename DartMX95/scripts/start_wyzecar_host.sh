@@ -3,7 +3,7 @@
 #
 # Usage (on DART host):
 #   sudo -i
-#   /root/WYZECAR/DartMX95/scripts/start_wyzecar_host.sh
+#   /root/WYZECAR/DartMX95/scripts/start_wyzecar_host.sh [remote|all|nodetect|...]
 #
 # Optional env overrides:
 #   VIDEO_DEVICE=/dev/video13
@@ -69,6 +69,18 @@ echo "Starting container..."
 echo "Press Ctrl+C to stop."
 echo ""
 
+# Forward any args to the in-container script (defaults to "all" if none).
+MODE_ARGS=("$@")
+if [[ ${#MODE_ARGS[@]} -eq 0 ]]; then
+  MODE_ARGS=("all")
+fi
+
+# Build a safely-quoted argument string for bash -lc.
+MODE_ARGS_Q=""
+for a in "${MODE_ARGS[@]}"; do
+  MODE_ARGS_Q+=" $(printf '%q' "$a")"
+done
+
 # If you get 'name already in use', remove the old container.
 docker rm -f wyzecar >/dev/null 2>&1 || true
 
@@ -80,6 +92,6 @@ exec docker run --rm -it --name wyzecar \
   -v "$REPO_ROOT:/workspace" \
   -w /workspace \
   "$IMAGE" \
-  bash -lc "bash /workspace/DartMX95/scripts/start_wyzecar.sh"
+  bash -lc "bash /workspace/DartMX95/scripts/start_wyzecar.sh${MODE_ARGS_Q}"
 
 

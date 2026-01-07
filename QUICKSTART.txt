@@ -224,6 +224,12 @@ DEVELOPMENT WORKFLOW
    git pull
    ./wyzecar.sh restart
 
+5. First Start:
+   ssh root@192.168.5.181
+   cd ~/WYZECAR
+   git pull
+   ./wyzecar.sh start
+
 ====================================
 KEY FILES
 ====================================

@@ -670,8 +670,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         cv2.putText(frame, "Waiting for camera...", (200, 240),
                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                 
-                # Flip the frame vertically only
-                frame = cv2.flip(frame, 0)
+                # Flip the frame horizontally
+                frame = cv2.flip(frame, 1)
                 
                 # Lower quality for faster encoding/transfer (reduces latency)
                 _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])

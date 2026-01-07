@@ -113,17 +113,13 @@ class HumanDetectorNode(Node):
             self.get_logger().info(f'  Process every {self.process_every_n_frames} frames')
 
     def image_callback(self, msg):
-        """Save the latest frame - fix orientation at source for all downstream processing."""
+        """Save the latest frame - orientation is handled by image_preprocessor node."""
         self.frame_count += 1
         self.last_image_time = time.time()
         
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            
-            # Fix camera orientation: flip both axes to correct upside-down and mirroring
-            # This ensures all overlays (bounding boxes, labels, text) are drawn correctly
-            cv_image = cv2.flip(cv_image, -1)
-            
+            # Frame is already correctly oriented by image_preprocessor node
             with self.lock:
                 self.latest_frame = cv_image
                 self.latest_header = msg.header

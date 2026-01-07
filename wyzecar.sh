@@ -152,16 +152,27 @@ container_start() {
             MOTLOG="$RUNLOGDIR/motor.log"
             WEBLOG="$RUNLOGDIR/web.log"
             
-            # Start camera node
+            # Start camera node (publishes to /camera/image_raw to avoid topic conflict)
             $STDBUF_CMD ros2 run v4l2_camera v4l2_camera_node --ros-args \
               -p video_device:=/dev/video13 \
               -p image_size:=[320,240] \
               -p pixel_format:=UYVY \
               -p framerate:=15.0 \
+              -r __ns:=/camera \
               >> "$CAMLOG" 2>&1 &
             CAM_PID=$!
             print_success "Camera node (320x240 @ 15fps)"
             sleep 2
+            
+            # Start image preprocessor (handles orientation correction)
+            # Subscribes to /camera/image_raw, publishes to /image_raw
+            $STDBUF_CMD python3 /workspace/ros2/image_preprocessor.py --ros-args \
+              -p rotate_180:=true \
+              -r image_raw:=/camera/image_raw \
+              >> "$CAMLOG" 2>&1 &
+            PREPROC_PID=$!
+            print_success "Image preprocessor (orientation correction)"
+            sleep 1
             
             # Start detector
             DETECT_FLAGS=""
@@ -216,7 +227,7 @@ container_start() {
             # Cleanup
             echo ""
             echo "Stopping nodes..."
-            kill "$CAM_PID" "$DET_PID" "$MOT_PID" 2>/dev/null || true
+            kill "$CAM_PID" "$PREPROC_PID" "$DET_PID" "$MOT_PID" 2>/dev/null || true
             [ -n "$FOL_PID" ] && kill "$FOL_PID" 2>/dev/null || true
             ;;
             

@@ -36,13 +36,19 @@ class ImagePreprocessorNode(Node):
         
         self.bridge = CvBridge()
         
-        # Subscriber - raw camera feed (topic name can be remapped)
-        # Default: /image_raw, but can be remapped to /camera/image_raw via --ros-args
-        self.image_sub = self.create_subscription(
-            Image, 'image_raw', self.image_callback, 10)
+        # Declare topic names as parameters for flexibility
+        self.declare_parameter('input_topic', '/camera/image_raw')
+        self.declare_parameter('output_topic', '/image_raw')
         
-        # Publisher - corrected feed (publishes to /image_raw for downstream nodes)
-        self.image_pub = self.create_publisher(Image, 'image_raw', 10)
+        input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
+        output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
+        
+        # Subscriber - raw camera feed
+        self.image_sub = self.create_subscription(
+            Image, input_topic, self.image_callback, 10)
+        
+        # Publisher - corrected feed (for downstream nodes)
+        self.image_pub = self.create_publisher(Image, output_topic, 10)
         
         flip_mode = "180° rotation" if self.rotate_180 else f"H:{self.flip_h} V:{self.flip_v}"
         self.get_logger().info(f'Image Preprocessor started - Orientation: {flip_mode}')

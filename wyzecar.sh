@@ -152,7 +152,7 @@ container_start() {
             MOTLOG="$RUNLOGDIR/motor.log"
             WEBLOG="$RUNLOGDIR/web.log"
             
-            # Start camera node (publishes to /camera/image_raw to avoid topic conflict)
+            # Start camera node (publishes to namespaced topic to avoid conflict)
             $STDBUF_CMD ros2 run v4l2_camera v4l2_camera_node --ros-args \
               -p video_device:=/dev/video13 \
               -p image_size:=[320,240] \
@@ -168,7 +168,8 @@ container_start() {
             # Subscribes to /camera/image_raw, publishes to /image_raw
             $STDBUF_CMD python3 /workspace/ros2/image_preprocessor.py --ros-args \
               -p rotate_180:=true \
-              -r image_raw:=/camera/image_raw \
+              -p input_topic:=/camera/image_raw \
+              -p output_topic:=/image_raw \
               >> "$CAMLOG" 2>&1 &
             PREPROC_PID=$!
             print_success "Image preprocessor (orientation correction)"

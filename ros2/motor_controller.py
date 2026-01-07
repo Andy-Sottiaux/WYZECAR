@@ -200,7 +200,10 @@ class SmoothMotorController(Node):
         # Apply exponential smoothing to input commands
         alpha = self.velocity_smoothing
         self.smoothed_linear = alpha * msg.linear.x + (1 - alpha) * self.smoothed_linear
-        self.smoothed_angular = alpha * msg.angular.z + (1 - alpha) * self.smoothed_angular
+        
+        # Use aggressive smoothing for angular to reduce jerkiness
+        angular_alpha = 0.5  # Higher = more responsive but jerkier
+        self.smoothed_angular = angular_alpha * msg.angular.z + (1 - angular_alpha) * self.smoothed_angular
         
         # Convert smoothed velocity to target speed percentage
         # max_linear_speed maps to max_speed_percent
@@ -221,6 +224,10 @@ class SmoothMotorController(Node):
         # We need to use full 0-180 range to get full 1300-1900 PWM range
         # angular_ratio in [-1, 1] where +/-1 is full steering deflection.
         angular_ratio = max(-1.0, min(1.0, self.smoothed_angular / float(self.max_angular_speed)))
+        
+        # Apply small deadband to reduce jitter when centered
+        if abs(angular_ratio) < 0.02:  # 2% deadband
+            angular_ratio = 0.0
         # Map to full servo range: 0-180 degrees
         # Simple linear mapping for predictable control
         if angular_ratio < 0:

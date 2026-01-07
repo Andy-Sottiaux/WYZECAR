@@ -670,8 +670,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         cv2.putText(frame, "Waiting for camera...", (200, 240),
                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                 
-                # Flip the frame horizontally to fix left-to-right mirroring
-                frame = cv2.flip(frame, 1)
+                # Fix camera orientation: flip both axes to correct upside-down and mirroring
+                # This is equivalent to rotating 180 degrees
+                frame = cv2.flip(frame, -1)
                 
                 # Lower quality for faster encoding/transfer (reduces latency)
                 _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])

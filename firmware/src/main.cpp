@@ -128,8 +128,8 @@ void setup() {
   pinMode(IN4, OUTPUT);
   pinMode(ENB, OUTPUT);
   
-  // Initialize servo with custom PWM range (1200-1800µs)
-  // 0° = 1200µs (left), 90° = 1500µs (center), 180° = 1800µs (right)
+  // Initialize servo with custom PWM range (1300-1900µs)
+  // 0° = 1300µs (left), 90° = 1600µs (center), 180° = 1900µs (right)
   steeringServo.attach(SERVO_PIN, SERVO_MIN_US, SERVO_MAX_US);
   steeringServo.write(servoAngle);  // Start at center (90°)
   

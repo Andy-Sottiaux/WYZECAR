@@ -671,19 +671,8 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         cv2.putText(frame, "Waiting for camera...", (200, 240),
                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                 
-                # Fix camera orientation: flip both axes to correct upside-down and mirroring
-                # This is equivalent to rotating 180 degrees
-                frame = cv2.flip(frame, -1)
-                
-                # Draw YOLO overlay AFTER flip so it's always correctly oriented
-                height, width = frame.shape[:2]
-                with state_lock:
-                    detection_fps = state['detection_fps']
-                    person_count = state['person_count']
-                
-                # Draw overlay at bottom-left (readable position)
-                status = f"YOLO: {detection_fps:.1f} fps | Persons: {person_count}"
-                cv2.putText(frame, status, (10, height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                # Frame is already correctly oriented from human_detector.py
+                # All overlays (bounding boxes, labels, status text) are drawn correctly
                 
                 # Lower quality for faster encoding/transfer (reduces latency)
                 _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])

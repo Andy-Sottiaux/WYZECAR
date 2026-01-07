@@ -113,12 +113,17 @@ class HumanDetectorNode(Node):
             self.get_logger().info(f'  Process every {self.process_every_n_frames} frames')
 
     def image_callback(self, msg):
-        """Save the latest frame - don't process here!"""
+        """Save the latest frame - fix orientation at source for all downstream processing."""
         self.frame_count += 1
         self.last_image_time = time.time()
         
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            
+            # Fix camera orientation: flip both axes to correct upside-down and mirroring
+            # This ensures all overlays (bounding boxes, labels, text) are drawn correctly
+            cv_image = cv2.flip(cv_image, -1)
+            
             with self.lock:
                 self.latest_frame = cv_image
                 self.latest_header = msg.header
@@ -251,8 +256,13 @@ class HumanDetectorNode(Node):
         cv2.line(frame, (width//2, 0), (width//2, height), (100, 100, 100), 1)
         cv2.line(frame, (0, height//2), (width, height//2), (100, 100, 100), 1)
         
-        # Note: YOLO overlay is now drawn in web_viewer.py after frame flip
-        # to ensure correct orientation. Detection boxes and crosshair remain here.
+        # Status overlay (frame is already correctly oriented from image_callback)
+        if self.disable_detection:
+            status = "DETECTION: DISABLED"
+            cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        else:
+            status = f"YOLO: {self.inference_fps:.1f} fps | Persons: {len(detections)}"
+            cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
         
         # Publish
         try:

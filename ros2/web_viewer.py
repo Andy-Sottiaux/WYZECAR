@@ -150,9 +150,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         linear = -0.6  # Backward (60% speed - matches max_linear_speed)
                     
                     if state['keys'].get('a'):
-                        angular = -0.6  # Turn left (matches max_angular_speed)
+                        angular = -0.6  # Turn left (full range)
                     elif state['keys'].get('d'):
-                        angular = 0.6  # Turn right (matches max_angular_speed)
+                        angular = 0.6  # Turn right (full range)
                     
                     state['cmd_vel'] = {'linear': linear, 'angular': angular}
                     state['cmd_vel_ts'] = time.time()

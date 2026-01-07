@@ -68,10 +68,6 @@ class SmoothMotorController(Node):
         # Keepalive ensures motors keep running even if command values are steady.
         self.declare_parameter('i2c_keepalive_rate', 5.0)  # Hz (must be <10Hz I2C limiter)
         
-        # Turn speed reduction - reduce speed to this percentage when turning
-        self.declare_parameter('turn_speed_reduction', 0.55)  # 55% of normal speed when turning
-        self.declare_parameter('turn_threshold', 0.1)  # Angular velocity threshold to trigger reduction
-        
         # Get parameters
         self.i2c_bus = self.get_parameter('i2c_bus').get_parameter_value().integer_value
         self.esp32_address = self.get_parameter('esp32_address').get_parameter_value().integer_value
@@ -95,8 +91,6 @@ class SmoothMotorController(Node):
         self.i2c_keepalive_rate = self.get_parameter('i2c_keepalive_rate').get_parameter_value().double_value
         if self.i2c_keepalive_rate <= 0:
             self.i2c_keepalive_rate = 5.0
-        self.turn_speed_reduction = self.get_parameter('turn_speed_reduction').get_parameter_value().double_value
-        self.turn_threshold = self.get_parameter('turn_threshold').get_parameter_value().double_value
         
         # Motion state
         self.target_speed = 0.0  # Desired speed from commands
@@ -223,17 +217,6 @@ class SmoothMotorController(Node):
         # Enforce a minimum moving command when non-zero (reduces PWM whine below stall torque)
         if self.min_moving_speed_percent > 0 and abs(self.target_speed) > 0.001:
             if abs(self.target_speed) < float(self.min_moving_speed_percent):
-                self.target_speed = float(self.min_moving_speed_percent) * (1.0 if self.target_speed > 0 else -1.0)
-        
-        # Apply turn speed reduction when steering is initiated (after minimum speed enforcement)
-        if abs(self.smoothed_angular) > self.turn_threshold and abs(self.target_speed) > 0.001:
-            # Calculate reduced speed
-            reduced_speed = self.target_speed * self.turn_speed_reduction
-            # Only apply reduction if it doesn't go below minimum moving speed
-            if abs(reduced_speed) >= float(self.min_moving_speed_percent):
-                self.target_speed = reduced_speed
-            else:
-                # Keep at minimum moving speed when turning
                 self.target_speed = float(self.min_moving_speed_percent) * (1.0 if self.target_speed > 0 else -1.0)
         
         # Convert angular to servo angle

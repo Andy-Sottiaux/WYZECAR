@@ -64,6 +64,7 @@ state = {
     'cmd_rate': 0.0,
     'frame_count': 0,
     'cmd_count': 0,
+    'person_count': 0,  # Number of detected persons
 }
 
 # Global reference to ROS node for publishing
@@ -674,6 +675,16 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                 # This is equivalent to rotating 180 degrees
                 frame = cv2.flip(frame, -1)
                 
+                # Draw YOLO overlay AFTER flip so it's always correctly oriented
+                height, width = frame.shape[:2]
+                with state_lock:
+                    detection_fps = state['detection_fps']
+                    person_count = state['person_count']
+                
+                # Draw overlay at bottom-left (readable position)
+                status = f"YOLO: {detection_fps:.1f} fps | Persons: {person_count}"
+                cv2.putText(frame, status, (10, height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                
                 # Lower quality for faster encoding/transfer (reduces latency)
                 _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 self.wfile.write(b'--frame\r\n')
@@ -812,6 +823,7 @@ class WebViewerNode(Node):
                 state['target'] = None
                 state['target_vx'] = 0.0
                 state['target_vd'] = 0.0
+                state['person_count'] = 0
             
             # Stop motors if no commands for 0.5s
             if cmd_age > 0.5:

@@ -251,14 +251,8 @@ class HumanDetectorNode(Node):
         cv2.line(frame, (width//2, 0), (width//2, height), (100, 100, 100), 1)
         cv2.line(frame, (0, height//2), (width, height//2), (100, 100, 100), 1)
         
-        # Status overlay (top-left, will end up at bottom-right after double flip)
-        # After cv2.flip(frame, -1) in web_viewer, this will appear at bottom-right
-        if self.disable_detection:
-            status = "DETECTION: DISABLED"
-            cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        else:
-            status = f"YOLO: {self.inference_fps:.1f} fps | Persons: {len(detections)}"
-            cv2.putText(frame, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        # Note: YOLO overlay is now drawn in web_viewer.py after frame flip
+        # to ensure correct orientation. Detection boxes and crosshair remain here.
         
         # Publish
         try:

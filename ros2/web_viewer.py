@@ -150,9 +150,9 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                         linear = -0.6  # Backward (60% speed - matches max_linear_speed)
                     
                     if state['keys'].get('a'):
-                        angular = -1.0  # Turn left (full deflection)
+                        angular = -0.6  # Turn left (matches max_angular_speed)
                     elif state['keys'].get('d'):
-                        angular = 1.0  # Turn right (full deflection)
+                        angular = 0.6  # Turn right (matches max_angular_speed)
                     
                     state['cmd_vel'] = {'linear': linear, 'angular': angular}
                     state['cmd_vel_ts'] = time.time()
@@ -625,7 +625,7 @@ class MJPEGHandler(BaseHTTPRequestHandler):
                     linearBar.style.left = linear >= 0 ? '50%' : (50 - linearPct) + '%';
                     linearBar.style.width = linearPct + '%';
                     
-                    const angularPct = Math.abs(angular) / 1.0 * 50;
+                    const angularPct = Math.abs(angular) / 0.6 * 50;
                     angularBar.style.left = angular >= 0 ? '50%' : (50 - angularPct) + '%';
                     angularBar.style.width = angularPct + '%';
                     

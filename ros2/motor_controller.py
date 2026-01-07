@@ -69,7 +69,7 @@ class SmoothMotorController(Node):
         self.declare_parameter('i2c_keepalive_rate', 5.0)  # Hz (must be <10Hz I2C limiter)
         
         # Turn speed reduction - reduce speed to this percentage when turning
-        self.declare_parameter('turn_speed_reduction', 0.4)  # 40% of normal speed when turning
+        self.declare_parameter('turn_speed_reduction', 0.55)  # 55% of normal speed when turning
         self.declare_parameter('turn_threshold', 0.1)  # Angular velocity threshold to trigger reduction
         
         # Get parameters

@@ -224,10 +224,10 @@ class SmoothMotorController(Node):
         # Map to full servo range with left turn compensation
         # Left turns need more aggressive PWM due to mechanical resistance
         if angular_ratio < 0:
-            # Left: map [-1, 0] to [servo_min, servo_center] with 1.2x boost
+            # Left: map [-1, 0] to [servo_min, servo_center] with 1.5x boost
             # This compensates for mechanical binding on left turns
             left_range = self.servo_center - self.servo_min
-            boosted_ratio = min(1.0, abs(angular_ratio) * 1.2)  # 20% boost for left
+            boosted_ratio = min(1.0, abs(angular_ratio) * 1.5)  # 50% boost for left
             self.target_servo = int(round(self.servo_center - boosted_ratio * left_range))
         else:
             # Right: map [0, 1] to [servo_center, servo_max] - normal mapping

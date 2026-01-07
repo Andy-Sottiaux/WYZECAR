@@ -312,18 +312,8 @@ class SmoothMotorController(Node):
             return max(current - max_change, target)
 
     def _ramp_servo(self, current: float, target: float, dt: float) -> float:
-        """Ramp servo angle with slew rate limiting."""
-        diff = target - current
-        
-        if abs(diff) < 0.5:
-            return target
-        
-        max_change = self.servo_slew_rate * dt
-        
-        if diff > 0:
-            return min(current + max_change, target)
-        else:
-            return max(current - max_change, target)
+        """No ramping - servo moves at maximum speed."""
+        return target  # Instant movement to target position
 
     def _send_command(self):
         """Send motor command via I2C."""

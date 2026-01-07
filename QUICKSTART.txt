@@ -1,0 +1,188 @@
+====================================
+WYZECAR QUICK START GUIDE
+====================================
+
+OVERVIEW
+--------
+WYZECAR is a vision-based following robot using:
+- DART-MX95 (main computer with ROS2)
+- ESP32 (motor/servo controller via I2C)
+- USB camera for computer vision
+- L298N motor driver
+- Servo for steering
+
+Current Settings:
+- Top Speed: 60% (adjustable in ros2/motor_controller.py)
+- Steering Response: 0.6 max_angular_speed (more sensitive)
+- Servo Slew Rate: 500°/s (fast steering)
+- Deceleration: 300%/s (quick stops)
+
+====================================
+HARDWARE CONNECTIONS
+====================================
+
+ESP32 Connections:
+- I2C: GPIO 21 (SDA), GPIO 22 (SCL) -> DART J6 pins
+- Motors: ENA/IN1/IN2 (rear), ENB/IN3/IN4 (front)
+- Servo: GPIO 33
+- Power: 5V from USB
+
+DART-MX95 Connections:
+- I2C3: /dev/i2c-3 (J6 header)
+- Camera: /dev/video13 (USB)
+- WiFi: 192.168.5.181 (configured)
+
+====================================
+QUICK START STEPS
+====================================
+
+1. POWER ON
+   - Connect ESP32 via USB (powers ESP32 + provides serial)
+   - Power on DART-MX95
+   - Power motor driver (12V battery)
+
+2. UPLOAD ESP32 FIRMWARE (if needed)
+   cd ~/Documents/GitHub/WYZECAR/firmware
+   platformio run --target upload
+
+3. ACCESS WYZECAR
+   - SSH: ssh root@192.168.5.181
+   - Web Interface: http://192.168.5.181:8080
+
+4. START/STOP WYZECAR
+   On DART (via SSH):
+   cd /home/wyzecar/WYZECAR
+   ./wyzecar.sh start    # Start all services
+   ./wyzecar.sh stop     # Stop all services
+   ./wyzecar.sh logs     # View logs
+   ./wyzecar.sh restart  # Restart services
+
+5. UPDATE CODE
+   On your computer:
+   cd ~/Documents/GitHub/WYZECAR
+   git add -A
+   git commit -m "Your changes"
+   git push
+
+   On DART (via SSH):
+   cd /home/wyzecar/WYZECAR
+   git pull
+   ./wyzecar.sh restart
+
+====================================
+WEB CONTROL INTERFACE
+====================================
+
+Access: http://192.168.5.181:8080
+
+Controls:
+- W/S: Forward/Backward (60% max speed)
+- A/D: Left/Right steering
+- Space: Emergency stop
+- F: Toggle follow mode
+- 1-9: Adjust follow distance
+
+Features:
+- 30 FPS video stream
+- 50Hz control rate
+- Real-time status display
+
+====================================
+ADJUSTING SETTINGS
+====================================
+
+1. SPEED SETTINGS
+   Edit ros2/motor_controller.py:
+   - max_speed_percent: 60 (current, range 0-100)
+   - max_linear_speed: 0.6 (must match percentage)
+   
+   Edit ros2/web_viewer.py:
+   - Update linear values to match (e.g., 0.6 for 60%)
+   - Update display values to match percentage
+
+2. STEERING SENSITIVITY
+   - max_angular_speed: 0.6 (lower = more sensitive)
+   - servo_slew_rate: 500 (higher = faster)
+
+3. SERVO TRIM (if turns aren't equal)
+   Option 1 - ROS2 parameter:
+   ros2 param set /motor_controller servo_center_angle 87
+   
+   Option 2 - ESP32 firmware:
+   Edit firmware/src/main.cpp:
+   #define SERVO_CENTER_US 1480  // Adjust ±20
+
+====================================
+TESTING I2C COMMUNICATION
+====================================
+
+On DART:
+i2cdetect -y 3              # Should show 42
+i2cset -y 3 0x42 0x01 50 50 90 i  # Test command
+
+====================================
+COMMON ISSUES
+====================================
+
+1. Motors not responding:
+   - Check I2C: i2cdetect -y 3
+   - Check ESP32 serial monitor
+   - Verify 12V power to motor driver
+
+2. Video lag:
+   - Currently optimized for 30 FPS
+   - Check WiFi signal strength
+   - Reduce JPEG quality if needed
+
+3. Uneven turning:
+   - Adjust servo_center_angle parameter
+   - Check mechanical linkage
+
+4. Car won't stop quickly:
+   - deceleration_rate is set to 300%/s
+   - Increase if needed
+
+====================================
+DEVELOPMENT WORKFLOW
+====================================
+
+1. Make changes on your computer
+2. Test ESP32 changes:
+   cd firmware
+   platformio run --target upload
+   
+3. Commit and push:
+   git add -A
+   git commit -m "Description"
+   git push
+
+4. Deploy to DART:
+   ssh root@192.168.5.181
+   cd /home/wyzecar/WYZECAR
+   git pull
+   ./wyzecar.sh restart
+
+====================================
+KEY FILES
+====================================
+
+- ros2/motor_controller.py - Motor control logic
+- ros2/web_viewer.py - Web interface
+- ros2/follower.py - Vision tracking
+- firmware/src/main.cpp - ESP32 firmware
+- wyzecar.sh - Service management
+- docker-compose.yml - Container config
+
+====================================
+MONITORING
+====================================
+
+View logs:
+./wyzecar.sh logs
+
+Monitor ROS2 topics:
+docker exec -it wyzecar bash
+ros2 topic list
+ros2 topic echo /cmd_vel
+
+====================================

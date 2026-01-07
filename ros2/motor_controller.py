@@ -221,13 +221,16 @@ class SmoothMotorController(Node):
         # We need to use full 0-180 range to get full 1200-1800 PWM range
         # angular_ratio in [-1, 1] where +/-1 is full steering deflection.
         angular_ratio = max(-1.0, min(1.0, self.smoothed_angular / float(self.max_angular_speed)))
-        # Map to full servo range: 0-180 degrees
-        # This ensures we use the full ESP32 PWM range (1300-1700us)
+        # Map to full servo range with left turn compensation
+        # Left turns need more aggressive PWM due to mechanical resistance
         if angular_ratio < 0:
-            # Left: map [-1, 0] to [servo_min, servo_center]
-            self.target_servo = int(round(self.servo_center + angular_ratio * (self.servo_center - self.servo_min)))
+            # Left: map [-1, 0] to [servo_min, servo_center] with 1.2x boost
+            # This compensates for mechanical binding on left turns
+            left_range = self.servo_center - self.servo_min
+            boosted_ratio = min(1.0, abs(angular_ratio) * 1.2)  # 20% boost for left
+            self.target_servo = int(round(self.servo_center - boosted_ratio * left_range))
         else:
-            # Right: map [0, 1] to [servo_center, servo_max]
+            # Right: map [0, 1] to [servo_center, servo_max] - normal mapping
             self.target_servo = int(round(self.servo_center + angular_ratio * (self.servo_max - self.servo_center)))
 
         # Startup kick: when going from stopped -> moving, apply a brief stronger initial command

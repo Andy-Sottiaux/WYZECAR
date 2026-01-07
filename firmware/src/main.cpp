@@ -44,7 +44,7 @@
 
 // Servo Pin and PWM Configuration
 #define SERVO_PIN 33
-#define SERVO_MIN_US 1200   // Minimum pulse width (full left) - 1500 - 300
+#define SERVO_MIN_US 1100   // Minimum pulse width (full left) - Extended for more torque
 #define SERVO_MAX_US 1800   // Maximum pulse width (full right) - 1500 + 300
 #define SERVO_CENTER_US 1500 // Center pulse width
 #define SERVO_DEADBAND 10    // Degrees - ignore small changes to prevent buzzing

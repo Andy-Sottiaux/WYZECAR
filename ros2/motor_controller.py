@@ -39,12 +39,12 @@ class SmoothMotorController(Node):
         # ROS2 Parameters
         self.declare_parameter('i2c_bus', 3)
         self.declare_parameter('esp32_address', 0x42)
-        self.declare_parameter('max_speed_percent', 60)  # 60% max speed
+        self.declare_parameter('max_speed_percent', 100)  # 100% max speed
         self.declare_parameter('acceleration_rate', 40.0)  # % per second (quick ramp)
         self.declare_parameter('deceleration_rate', 300.0)  # % per second (very fast braking when key released)
         self.declare_parameter('servo_slew_rate', 500.0)  # degrees per second (max speed steering)
         # Throttle mapping / stiction compensation
-        self.declare_parameter('max_linear_speed', 0.6)  # m/s - 60% speed
+        self.declare_parameter('max_linear_speed', 1.0)  # m/s - 100% speed
         self.declare_parameter('throttle_expo', 0.75)  # <1 increases low-end authority (helps overcome stiction)
         self.declare_parameter('min_moving_speed_percent', 12)  # min commanded speed when nonzero (reduces PWM whine)
         self.declare_parameter('startup_kick_enabled', True)
@@ -220,15 +220,20 @@ class SmoothMotorController(Node):
         if self.smoothed_linear < 0:
             self.target_speed = -self.target_speed
 
-        # Apply turn speed reduction when steering is initiated
-        # TEMPORARILY DISABLED FOR DEBUGGING
-        # if abs(self.smoothed_angular) > self.turn_threshold:
-        #     # Reduce speed to configured percentage when turning
-        #     self.target_speed *= self.turn_speed_reduction
-        
         # Enforce a minimum moving command when non-zero (reduces PWM whine below stall torque)
         if self.min_moving_speed_percent > 0 and abs(self.target_speed) > 0.001:
             if abs(self.target_speed) < float(self.min_moving_speed_percent):
+                self.target_speed = float(self.min_moving_speed_percent) * (1.0 if self.target_speed > 0 else -1.0)
+        
+        # Apply turn speed reduction when steering is initiated (after minimum speed enforcement)
+        if abs(self.smoothed_angular) > self.turn_threshold and abs(self.target_speed) > 0.001:
+            # Calculate reduced speed
+            reduced_speed = self.target_speed * self.turn_speed_reduction
+            # Only apply reduction if it doesn't go below minimum moving speed
+            if abs(reduced_speed) >= float(self.min_moving_speed_percent):
+                self.target_speed = reduced_speed
+            else:
+                # Keep at minimum moving speed when turning
                 self.target_speed = float(self.min_moving_speed_percent) * (1.0 if self.target_speed > 0 else -1.0)
         
         # Convert angular to servo angle

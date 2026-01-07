@@ -221,9 +221,10 @@ class SmoothMotorController(Node):
             self.target_speed = -self.target_speed
 
         # Apply turn speed reduction when steering is initiated
-        if abs(self.smoothed_angular) > self.turn_threshold:
-            # Reduce speed to configured percentage when turning
-            self.target_speed *= self.turn_speed_reduction
+        # TEMPORARILY DISABLED FOR DEBUGGING
+        # if abs(self.smoothed_angular) > self.turn_threshold:
+        #     # Reduce speed to configured percentage when turning
+        #     self.target_speed *= self.turn_speed_reduction
         
         # Enforce a minimum moving command when non-zero (reduces PWM whine below stall torque)
         if self.min_moving_speed_percent > 0 and abs(self.target_speed) > 0.001:

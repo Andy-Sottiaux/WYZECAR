@@ -30,7 +30,68 @@ ESP32 Connections:
 DART-MX95 Connections:
 - I2C3: /dev/i2c-3 (J6 header)
 - Camera: /dev/video13 (USB)
-- WiFi: 192.168.5.181 (configured)
+- WiFi: 192.168.5.181 (last known IP)
+
+====================================
+FINDING DART IP ADDRESS
+====================================
+
+Method 1 - Serial Console:
+- Connect USB-C to DART's console port
+- Open terminal: screen /dev/tty.usbserial* 115200
+- Login and run: hostname -I
+
+Method 2 - From Router:
+- Check your router's DHCP client list
+- Look for hostname "dartmx" or "wyzecar"
+
+Method 3 - Network Scan:
+- From your computer on same network:
+  nmap -sn 192.168.5.0/24 | grep -B 2 "Variscite"
+  or
+  arp -a | grep dartmx
+
+Method 4 - If Ethernet Connected:
+- The DART usually gets a consistent IP
+- Try previous IPs: 192.168.5.181, 192.168.5.183
+
+====================================
+WIFI CONFIGURATION
+====================================
+
+To configure WiFi on DART:
+
+1. CONNECT VIA SERIAL OR ETHERNET FIRST
+   screen /dev/tty.usbserial* 115200
+   or
+   ssh root@<ethernet_ip>
+
+2. CONFIGURE WIFI CREDENTIALS
+   Create/edit /etc/wpa_supplicant/wpa_supplicant.conf:
+   
+   network={
+       ssid="YourNetworkName"
+       psk="YourPassword"
+   }
+
+3. CONFIGURE INTERFACE
+   Create /etc/network/interfaces.d/wlan0:
+   
+   auto wlan0
+   iface wlan0 inet dhcp
+       wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
+
+4. ACTIVATE WIFI
+   ifup wlan0
+   
+5. VERIFY CONNECTION
+   ip addr show wlan0
+   ping -c 2 google.com
+
+6. MAKE IT PERMANENT
+   systemctl enable networking
+
+Note: WiFi will auto-connect on boot after configuration.
 
 ====================================
 QUICK START STEPS
@@ -46,8 +107,9 @@ QUICK START STEPS
    platformio run --target upload
 
 3. ACCESS WYZECAR
-   - SSH: ssh root@192.168.5.181
-   - Web Interface: http://192.168.5.181:8080
+   - Find IP first (see "FINDING DART IP ADDRESS" section above)
+   - SSH: ssh root@<dart_ip>
+   - Web Interface: http://<dart_ip>:8080
 
 4. START/STOP WYZECAR
    On DART (via SSH):

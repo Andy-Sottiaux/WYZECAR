@@ -221,17 +221,18 @@ class SmoothMotorController(Node):
         # We need to use full 0-180 range to get full 1200-1800 PWM range
         # angular_ratio in [-1, 1] where +/-1 is full steering deflection.
         angular_ratio = max(-1.0, min(1.0, self.smoothed_angular / float(self.max_angular_speed)))
-        # Map to full servo range with left turn compensation
-        # Left turns need more aggressive PWM due to mechanical resistance
+        # Map to full servo range with 2x boost for both directions
+        # This provides maximum steering authority and faster response
         if angular_ratio < 0:
-            # Left: map [-1, 0] to [servo_min, servo_center] with 1.5x boost
-            # This compensates for mechanical binding on left turns
+            # Left: map [-1, 0] to [servo_min, servo_center] with 2x boost
             left_range = self.servo_center - self.servo_min
-            boosted_ratio = min(1.0, abs(angular_ratio) * 1.5)  # 50% boost for left
+            boosted_ratio = min(1.0, abs(angular_ratio) * 2.0)  # 100% boost for left
             self.target_servo = int(round(self.servo_center - boosted_ratio * left_range))
         else:
-            # Right: map [0, 1] to [servo_center, servo_max] - normal mapping
-            self.target_servo = int(round(self.servo_center + angular_ratio * (self.servo_max - self.servo_center)))
+            # Right: map [0, 1] to [servo_center, servo_max] with 2x boost
+            right_range = self.servo_max - self.servo_center
+            boosted_ratio = min(1.0, angular_ratio * 2.0)  # 100% boost for right
+            self.target_servo = int(round(self.servo_center + boosted_ratio * right_range))
 
         # Startup kick: when going from stopped -> moving, apply a brief stronger initial command
         if self.startup_kick_enabled and self.startup_kick_duration > 0 and self.startup_kick_percent > 0:

@@ -113,7 +113,7 @@ QUICK START STEPS
 
 4. START/STOP WYZECAR
    On DART (via SSH):
-   cd /home/wyzecar/WYZECAR
+   cd ~/WYZECAR
    ./wyzecar.sh start    # Start all services
    ./wyzecar.sh stop     # Stop all services
    ./wyzecar.sh logs     # View logs
@@ -127,7 +127,7 @@ QUICK START STEPS
    git push
 
    On DART (via SSH):
-   cd /home/wyzecar/WYZECAR
+   cd ~/WYZECAR
    git pull
    ./wyzecar.sh restart
 
@@ -220,7 +220,7 @@ DEVELOPMENT WORKFLOW
 
 4. Deploy to DART:
    ssh root@192.168.5.181
-   cd /home/wyzecar/WYZECAR
+   cd ~/WYZECAR
    git pull
    ./wyzecar.sh restart
 

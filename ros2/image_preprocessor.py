@@ -76,8 +76,6 @@ class ImagePreprocessorNode(Node):
             
             # Publish corrected image
             self.image_pub.publish(corrected_msg)
-            # Also republish to /image_raw for backward compatibility
-            self.image_raw_pub.publish(corrected_msg)
             
         except Exception as e:
             self.get_logger().error(f'Image preprocessing error: {e}')

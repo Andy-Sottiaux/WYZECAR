@@ -801,6 +801,8 @@ class WebViewerNode(Node):
                 'distance': msg.point.z
             }
             state['target_ts'] = now
+            # If we have a target, at least 1 person is detected
+            state['person_count'] = 1
 
 
     def update_metrics(self):

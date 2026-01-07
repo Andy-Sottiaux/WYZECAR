@@ -757,6 +757,8 @@ class WebViewerNode(Node):
     def _update_frame(self, msg, source):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            # Flip the frame vertically (rotate 180 degrees)
+            frame = cv2.flip(frame, -1)  # -1 flips both horizontally and vertically (180° rotation)
             with state_lock:
                 state['frame'] = frame
                 state['frame_ts'] = time.time()
